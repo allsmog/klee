@@ -134,12 +134,20 @@ static constexpr std::array handlerInfo = {
   // operator delete(void*)
   add("_ZdlPv", handleDelete, false),
 
+  // C++14 sized deallocation
+  // operator delete(void*, unsigned long)
+  add("_ZdlPvm", handleDelete, false),
+  // operator delete[](void*, unsigned long)
+  add("_ZdaPvm", handleDeleteArray, false),
+  // operator delete(void*, unsigned int) (32-bit)
+  add("_ZdlPvj", handleDelete, false),
+  // operator delete[](void*, unsigned int) (32-bit)
+  add("_ZdaPvj", handleDeleteArray, false),
+
   // operator new[](unsigned int)
   add("_Znaj", handleNewArray, true),
   // operator new(unsigned int)
   add("_Znwj", handleNew, true),
-
-  // FIXME-64: This is wrong for 64-bit long...
 
   // operator new[](unsigned long)
   add("_Znam", handleNewArray, true),
@@ -359,18 +367,18 @@ void SpecialFunctionHandler::handleNew(ExecutionState &state,
   // XXX should type check args
   assert(arguments.size()==1 && "invalid number of arguments to new");
 
-  executor.executeAlloc(state, arguments[0], false, target);
+  executor.executeAlloc(state, arguments[0], false, target, false, 0, 0,
+                        AllocationType::New);
 }
 
 void SpecialFunctionHandler::handleDelete(ExecutionState &state,
                             KInstruction *target,
                             std::vector<ref<Expr> > &arguments) {
-  // FIXME: Should check proper pairing with allocation type (malloc/free,
-  // new/delete, new[]/delete[]).
-
   // XXX should type check args
-  assert(arguments.size()==1 && "invalid number of arguments to delete");
-  executor.executeFree(state, arguments[0]);
+  // Sized deallocation (C++14) passes 2 args: (void*, size_t)
+  assert((arguments.size()==1 || arguments.size()==2) &&
+         "invalid number of arguments to delete");
+  executor.executeFree(state, arguments[0], 0, AllocationType::New);
 }
 
 void SpecialFunctionHandler::handleNewArray(ExecutionState &state,
@@ -378,15 +386,18 @@ void SpecialFunctionHandler::handleNewArray(ExecutionState &state,
                               std::vector<ref<Expr> > &arguments) {
   // XXX should type check args
   assert(arguments.size()==1 && "invalid number of arguments to new[]");
-  executor.executeAlloc(state, arguments[0], false, target);
+  executor.executeAlloc(state, arguments[0], false, target, false, 0, 0,
+                        AllocationType::NewArray);
 }
 
 void SpecialFunctionHandler::handleDeleteArray(ExecutionState &state,
                                  KInstruction *target,
                                  std::vector<ref<Expr> > &arguments) {
   // XXX should type check args
-  assert(arguments.size()==1 && "invalid number of arguments to delete[]");
-  executor.executeFree(state, arguments[0]);
+  // Sized deallocation (C++14) passes 2 args: (void*, size_t)
+  assert((arguments.size()==1 || arguments.size()==2) &&
+         "invalid number of arguments to delete[]");
+  executor.executeFree(state, arguments[0], 0, AllocationType::NewArray);
 }
 
 void SpecialFunctionHandler::handleMalloc(ExecutionState &state,
@@ -394,7 +405,8 @@ void SpecialFunctionHandler::handleMalloc(ExecutionState &state,
                                   std::vector<ref<Expr> > &arguments) {
   // XXX should type check args
   assert(arguments.size()==1 && "invalid number of arguments to malloc");
-  executor.executeAlloc(state, arguments[0], false, target);
+  executor.executeAlloc(state, arguments[0], false, target, false, 0, 0,
+                        AllocationType::Malloc);
 }
 
 void SpecialFunctionHandler::handleMemalign(ExecutionState &state,
@@ -426,7 +438,7 @@ void SpecialFunctionHandler::handleMemalign(ExecutionState &state,
   }
 
   executor.executeAlloc(state, arguments[1], false, target, false, 0,
-                        alignment);
+                        alignment, AllocationType::Malloc);
 }
 
 #ifdef SUPPORT_KLEE_EH_CXX
@@ -668,7 +680,8 @@ void SpecialFunctionHandler::handleCalloc(ExecutionState &state,
 
   ref<Expr> size = MulExpr::create(arguments[0],
                                    arguments[1]);
-  executor.executeAlloc(state, size, false, target, true);
+  executor.executeAlloc(state, size, false, target, true, 0, 0,
+                        AllocationType::Malloc);
 }
 
 void SpecialFunctionHandler::handleRealloc(ExecutionState &state,
@@ -684,7 +697,8 @@ void SpecialFunctionHandler::handleRealloc(ExecutionState &state,
       executor.fork(state, Expr::createIsZero(size), true, BranchType::Realloc);
 
   if (zeroSize.first) { // size == 0
-    executor.executeFree(*zeroSize.first, address, target);   
+    executor.executeFree(*zeroSize.first, address, target,
+                         AllocationType::Malloc);
   }
   if (zeroSize.second) { // size != 0
     Executor::StatePair zeroPointer =
@@ -692,16 +706,17 @@ void SpecialFunctionHandler::handleRealloc(ExecutionState &state,
                       BranchType::Realloc);
 
     if (zeroPointer.first) { // address == 0
-      executor.executeAlloc(*zeroPointer.first, size, false, target);
-    } 
+      executor.executeAlloc(*zeroPointer.first, size, false, target, false, 0,
+                            0, AllocationType::Malloc);
+    }
     if (zeroPointer.second) { // address != 0
       Executor::ExactResolutionList rl;
       executor.resolveExact(*zeroPointer.second, address, rl, "realloc");
-      
-      for (Executor::ExactResolutionList::iterator it = rl.begin(), 
+
+      for (Executor::ExactResolutionList::iterator it = rl.begin(),
              ie = rl.end(); it != ie; ++it) {
-        executor.executeAlloc(*it->second, size, false, target, false, 
-                              it->first.second);
+        executor.executeAlloc(*it->second, size, false, target, false,
+                              it->first.second, 0, AllocationType::Malloc);
       }
     }
   }
@@ -713,7 +728,7 @@ void SpecialFunctionHandler::handleFree(ExecutionState &state,
   // XXX should type check args
   assert(arguments.size()==1 &&
          "invalid number of arguments to free");
-  executor.executeFree(state, arguments[0]);
+  executor.executeFree(state, arguments[0], 0, AllocationType::Malloc);
 }
 
 void SpecialFunctionHandler::handleCheckMemoryAccess(ExecutionState &state,

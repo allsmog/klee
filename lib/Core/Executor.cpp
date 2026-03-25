@@ -335,6 +335,8 @@ cl::list<StateTerminationType> ExitOnErrorType(
                    "values for that type"),
         clEnumValN(StateTerminationType::NullableAttribute, "NullableAttribute",
                    "Violation of nullable attribute detected"),
+        clEnumValN(StateTerminationType::MismatchedFree, "MismatchedFree",
+                   "Allocation/deallocation mismatch (e.g. new + free)"),
         clEnumValN(StateTerminationType::User, "User",
                    "Wrong klee_* function invocation")),
     cl::ZeroOrMore,
@@ -4206,7 +4208,8 @@ void Executor::executeAlloc(ExecutionState &state,
                             KInstruction *target,
                             bool zeroMemory,
                             const ObjectState *reallocFrom,
-                            size_t allocationAlignment) {
+                            size_t allocationAlignment,
+                            AllocationType allocType) {
   size = toUnique(state, size);
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(size)) {
     const llvm::Value *allocSite = state.prevPC->inst;
@@ -4217,9 +4220,10 @@ void Executor::executeAlloc(ExecutionState &state,
         memory->allocate(CE->getZExtValue(), isLocal, /*isGlobal=*/false,
                          &state, allocSite, allocationAlignment);
     if (!mo) {
-      bindLocal(target, state, 
+      bindLocal(target, state,
                 ConstantExpr::alloc(0, Context::get().getPointerWidth()));
     } else {
+      mo->allocType = allocType;
       ObjectState *os = bindObjectInState(state, mo, isLocal);
       if (zeroMemory) {
         os->initializeToZero();
@@ -4292,7 +4296,7 @@ void Executor::executeAlloc(ExecutionState &state,
       (void) success;
       if (res) {
         executeAlloc(*fixedSize.second, tmp, isLocal,
-                     target, zeroMemory, reallocFrom);
+                     target, zeroMemory, reallocFrom, 0, allocType);
       } else {
         // See if a *really* big value is possible. If so assume
         // malloc will fail for it, so lets fork and return 0.
@@ -4322,14 +4326,15 @@ void Executor::executeAlloc(ExecutionState &state,
     }
 
     if (fixedSize.first) // can be zero when fork fails
-      executeAlloc(*fixedSize.first, example, isLocal, 
-                   target, zeroMemory, reallocFrom);
+      executeAlloc(*fixedSize.first, example, isLocal,
+                   target, zeroMemory, reallocFrom, 0, allocType);
   }
 }
 
 void Executor::executeFree(ExecutionState &state,
                            ref<Expr> address,
-                           KInstruction *target) {
+                           KInstruction *target,
+                           AllocationType expectedType) {
   address = optimizer.optimizeExpr(address, true);
   StatePair zeroPointer =
       fork(state, Expr::createIsZero(address), true, BranchType::Free);
@@ -4351,6 +4356,16 @@ void Executor::executeFree(ExecutionState &state,
       } else if (mo->isGlobal) {
         terminateStateOnProgramError(*it->second, "free of global",
                                      StateTerminationType::Free,
+                                     getAddressInfo(*it->second, address));
+      } else if (expectedType != AllocationType::Unknown &&
+                 mo->allocType != AllocationType::Unknown &&
+                 mo->allocType != expectedType) {
+        std::string msg = "allocation/deallocation mismatch: allocated with " +
+                          std::string(allocationTypeName(mo->allocType)) +
+                          ", freed with " +
+                          std::string(allocationTypeName(expectedType));
+        terminateStateOnProgramError(*it->second, msg,
+                                     StateTerminationType::MismatchedFree,
                                      getAddressInfo(*it->second, address));
       } else {
         it->second->deallocate(mo);

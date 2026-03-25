@@ -285,7 +285,8 @@ private:
                     KInstruction *target,
                     bool zeroMemory=false,
                     const ObjectState *reallocFrom=0,
-                    size_t allocationAlignment=0);
+                    size_t allocationAlignment=0,
+                    AllocationType allocType=AllocationType::Unknown);
 
   /// Free the given address with checking for errors. If target is
   /// given it will be bound to 0 in the resulting states (this is a
@@ -294,7 +295,8 @@ private:
   /// afterwards.
   void executeFree(ExecutionState &state,
                    ref<Expr> address,
-                   KInstruction *target = 0);
+                   KInstruction *target = 0,
+                   AllocationType expectedType = AllocationType::Unknown);
 
   /// Serialize a landingpad instruction so it can be handled by the
   /// libcxxabi-runtime

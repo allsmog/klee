@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,26 @@ class ExecutionState;
 class Executor;
 class MemoryManager;
 class Solver;
+
+/// Tracks how a heap object was allocated, enabling mismatch detection
+/// between allocation and deallocation functions (e.g., new + free).
+enum class AllocationType : std::uint8_t {
+  Unknown,   ///< alloca, globals, fixed objects — not checked
+  Malloc,    ///< malloc, calloc, memalign, realloc
+  New,       ///< operator new
+  NewArray,  ///< operator new[]
+};
+
+/// Return a human-readable name for an AllocationType.
+inline const char *allocationTypeName(AllocationType t) {
+  switch (t) {
+  case AllocationType::Unknown:  return "unknown";
+  case AllocationType::Malloc:   return "malloc";
+  case AllocationType::New:      return "new";
+  case AllocationType::NewArray: return "new[]";
+  }
+  return "unknown";
+}
 
 class MemoryObject {
   friend class STPBuilder;
@@ -59,6 +80,9 @@ public:
   bool isFixed;
 
   bool isUserSpecified;
+
+  /// How this object was allocated (for mismatch detection).
+  AllocationType allocType = AllocationType::Unknown;
 
   MemoryManager *parent;
 
