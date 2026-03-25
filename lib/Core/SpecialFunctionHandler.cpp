@@ -109,6 +109,21 @@ static constexpr std::array handlerInfo = {
 #endif
   add("klee_is_symbolic", handleIsSymbolic, true),
   add("klee_make_symbolic", handleMakeSymbolic, false),
+  add("klee_make_symbolic_string", handleMakeSymbolicString, true),
+  add("klee_string_eq", handleStringEq, true),
+  add("klee_string_length", handleStringLength, true),
+  add("klee_string_concat", handleStringConcat, true),
+  add("klee_string_contains", handleStringContains, true),
+  add("klee_string_indexof", handleStringIndexOf, true),
+  add("klee_string_char_at", handleStringCharAt, true),
+  add("klee_string_substr", handleStringSubstr, true),
+  add("klee_string_matches_regex", handleStringMatchesRegex, true),
+
+  // C string function interception — use string theory when operating
+  // on string-backed symbolic buffers.
+  add("strcmp", handleStrcmpStr, true),
+  add("strlen", handleStrlenStr, true),
+  add("strstr", handleStrstrStr, true),
   add("klee_mark_global", handleMarkGlobal, false),
   add("klee_open_merge", handleOpenMerge, false),
   add("klee_close_merge", handleCloseMerge, false),
@@ -834,7 +849,20 @@ void SpecialFunctionHandler::handleMakeSymbolic(ExecutionState &state,
     
     if (res) {
       executor.executeMakeSymbolic(*s, mo, name);
-    } else {      
+
+      // Create a dual string theory representation for this buffer.
+      // This enables strcmp/strlen/strstr to use Z3 string theory
+      // instead of byte-by-byte comparison.
+      std::string strName = name + "_str";
+      ref<Expr> strVar = StrVarExpr::create(strName);
+      s->stringBackedBuffers[mo->id] = strVar;
+      s->symbolicStrings.push_back({name, strVar});
+
+      // Constrain: string length must fit in buffer (leave room for null)
+      ref<Expr> lenExpr = StrLenExpr::create(strVar);
+      ref<Expr> maxLen = ConstantExpr::alloc(mo->size, Expr::Int64);
+      executor.addConstraint(*s, UltExpr::create(lenExpr, maxLen));
+    } else {
       executor.terminateStateOnUserError(*s, "Wrong size given to klee_make_symbolic");
     }
   }
@@ -855,4 +883,335 @@ void SpecialFunctionHandler::handleMarkGlobal(ExecutionState &state,
     assert(!mo->isLocal);
     mo->isGlobal = true;
   }
+}
+
+void SpecialFunctionHandler::handleMakeSymbolicString(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 1 &&
+         "invalid number of arguments to klee_make_symbolic_string");
+
+  std::string name = readStringAtAddress(state, arguments[0]);
+  if (name.empty())
+    name = "unnamed_str";
+
+  // Ensure unique name
+  unsigned id = 0;
+  std::string uniqueName = name;
+  while (!state.arrayNames.insert(uniqueName).second)
+    uniqueName = name + "_" + std::to_string(++id);
+
+  // Create the symbolic string expression
+  ref<Expr> strExpr = StrVarExpr::create(uniqueName);
+
+  // Track in state for test case generation
+  state.symbolicStrings.push_back({uniqueName, strExpr});
+
+  // Return the 1-based index as a pointer-width constant handle.
+  // The string_eq/string_length handlers interpret this as an index.
+  unsigned index = state.symbolicStrings.size();
+  executor.bindLocal(target, state,
+                     ConstantExpr::alloc(index,
+                                         Context::get().getPointerWidth()));
+}
+
+void SpecialFunctionHandler::handleStringEq(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to klee_string_eq");
+
+  // arg[0] is the handle (1-based index as a pointer)
+  ref<Expr> handleExpr = executor.toUnique(state, arguments[0]);
+  if (!isa<ConstantExpr>(handleExpr)) {
+    executor.terminateStateOnUserError(
+        state, "klee_string_eq: could not resolve string handle");
+    return;
+  }
+  uint64_t handle = cast<ConstantExpr>(handleExpr)->getZExtValue();
+  if (handle == 0 || handle > state.symbolicStrings.size()) {
+    executor.terminateStateOnUserError(
+        state, "klee_string_eq: invalid string handle");
+    return;
+  }
+  uint64_t index = handle - 1;
+
+  ref<Expr> symbolicStr = state.symbolicStrings[index].second;
+
+  // Read the literal string from arg[1]
+  std::string literal = readStringAtAddress(state, arguments[1]);
+  ref<Expr> literalExpr = StrLiteralExpr::create(literal);
+
+  // Build string equality expression and fork
+  ref<Expr> eqExpr = StrEqExpr::create(symbolicStr, literalExpr);
+
+  Executor::StatePair sp =
+      executor.fork(state, eqExpr, false, BranchType::StrEq);
+
+  if (sp.first)
+    executor.bindLocal(target, *sp.first, ConstantExpr::alloc(1, Expr::Int32));
+  if (sp.second)
+    executor.bindLocal(target, *sp.second,
+                       ConstantExpr::alloc(0, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleStringLength(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 1 &&
+         "invalid number of arguments to klee_string_length");
+
+  ref<Expr> handleExpr = executor.toUnique(state, arguments[0]);
+  if (!isa<ConstantExpr>(handleExpr)) {
+    executor.terminateStateOnUserError(
+        state, "klee_string_length: could not resolve string handle");
+    return;
+  }
+  uint64_t handle = cast<ConstantExpr>(handleExpr)->getZExtValue();
+  if (handle == 0 || handle > state.symbolicStrings.size()) {
+    executor.terminateStateOnUserError(
+        state, "klee_string_length: invalid string handle");
+    return;
+  }
+  uint64_t index = handle - 1;
+
+  ref<Expr> symbolicStr = state.symbolicStrings[index].second;
+
+  // Build string length expression (returns Int64)
+  ref<Expr> lenExpr = StrLenExpr::create(symbolicStr);
+  executor.bindLocal(target, state, lenExpr);
+}
+
+// Helper to extract a symbolic string from a handle argument.
+static ref<Expr> resolveStringHandle(const ExecutionState &state,
+                                     ref<Expr> handleExpr) {
+  assert(isa<klee::ConstantExpr>(handleExpr) &&
+         "String handle must be concrete");
+  uint64_t handle = cast<klee::ConstantExpr>(handleExpr)->getZExtValue();
+  assert(handle > 0 && handle <= state.symbolicStrings.size() &&
+         "Invalid string handle");
+  return state.symbolicStrings[handle - 1].second;
+}
+
+void SpecialFunctionHandler::handleStringConcat(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to klee_string_concat");
+
+  ref<Expr> s1 = resolveStringHandle(state, arguments[0]);
+  ref<Expr> s2 = resolveStringHandle(state, arguments[1]);
+  ref<Expr> result = StrConcatExpr::create(s1, s2);
+
+  // Store the result as a new symbolic string and return its handle
+  state.symbolicStrings.push_back({"concat_result", result});
+  unsigned newIndex = state.symbolicStrings.size();
+  executor.bindLocal(target, state,
+                     ConstantExpr::alloc(newIndex,
+                                         Context::get().getPointerWidth()));
+}
+
+void SpecialFunctionHandler::handleStringContains(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to klee_string_contains");
+
+  ref<Expr> str = resolveStringHandle(state, arguments[0]);
+  std::string substr = readStringAtAddress(state, arguments[1]);
+  ref<Expr> subExpr = StrLiteralExpr::create(substr);
+  ref<Expr> containsExpr = StrContainsExpr::create(str, subExpr);
+
+  Executor::StatePair sp =
+      executor.fork(state, containsExpr, false, BranchType::StrEq);
+  if (sp.first)
+    executor.bindLocal(target, *sp.first, ConstantExpr::alloc(1, Expr::Int32));
+  if (sp.second)
+    executor.bindLocal(target, *sp.second,
+                       ConstantExpr::alloc(0, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleStringIndexOf(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to klee_string_indexof");
+
+  ref<Expr> str = resolveStringHandle(state, arguments[0]);
+  std::string substr = readStringAtAddress(state, arguments[1]);
+  ref<Expr> subExpr = StrLiteralExpr::create(substr);
+  ref<Expr> idxExpr = StrIndexOfExpr::create(str, subExpr);
+
+  executor.bindLocal(target, state, idxExpr);
+}
+
+void SpecialFunctionHandler::handleStringCharAt(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to klee_string_char_at");
+
+  ref<Expr> str = resolveStringHandle(state, arguments[0]);
+  ref<Expr> idx = arguments[1]; // Already a bitvector expression
+  ref<Expr> charExpr = StrCharAtExpr::create(str, idx);
+
+  executor.bindLocal(target, state, charExpr);
+}
+
+void SpecialFunctionHandler::handleStringSubstr(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 3 &&
+         "invalid number of arguments to klee_string_substr");
+
+  ref<Expr> str = resolveStringHandle(state, arguments[0]);
+  ref<Expr> offset = arguments[1];
+  ref<Expr> length = arguments[2];
+  ref<Expr> result = StrSubstrExpr::create(str, offset, length);
+
+  // Store result as a new symbolic string
+  state.symbolicStrings.push_back({"substr_result", result});
+  unsigned newIndex = state.symbolicStrings.size();
+  executor.bindLocal(target, state,
+                     ConstantExpr::alloc(newIndex,
+                                         Context::get().getPointerWidth()));
+}
+
+void SpecialFunctionHandler::handleStringMatchesRegex(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to klee_string_matches_regex");
+
+  ref<Expr> str = resolveStringHandle(state, arguments[0]);
+  std::string pattern = readStringAtAddress(state, arguments[1]);
+  ref<Expr> matchExpr = StrMatchesRegexExpr::create(str, pattern);
+
+  Executor::StatePair sp =
+      executor.fork(state, matchExpr, false, BranchType::StrEq);
+  if (sp.first)
+    executor.bindLocal(target, *sp.first, ConstantExpr::alloc(1, Expr::Int32));
+  if (sp.second)
+    executor.bindLocal(target, *sp.second,
+                       ConstantExpr::alloc(0, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleStrcmpStr(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 && "invalid number of arguments to strcmp");
+
+  // Helper lambda: resolve pointer to string variable
+  auto getStrVar = [&](ref<Expr> ptr) -> ref<Expr> {
+    ObjectPair op;
+    ref<Expr> addr = executor.toUnique(state, ptr);
+    if (!isa<klee::ConstantExpr>(addr))
+      return ref<Expr>(0);
+    if (!state.addressSpace.resolveOne(cast<klee::ConstantExpr>(addr), op))
+      return ref<Expr>(0);
+    auto it = state.stringBackedBuffers.find(op.first->id);
+    if (it == state.stringBackedBuffers.end())
+      return ref<Expr>(0);
+    return it->second;
+  };
+
+  ref<Expr> strVar1 = getStrVar(arguments[0]);
+  ref<Expr> strVar2 = getStrVar(arguments[1]);
+
+  // Build the two sides. Non-string-backed args are read as concrete literals.
+  ref<Expr> left, right;
+  if (!strVar1.isNull()) {
+    left = strVar1;
+  } else {
+    std::string lit = readStringAtAddress(state, arguments[0]);
+    left = StrLiteralExpr::create(lit);
+  }
+  if (!strVar2.isNull()) {
+    right = strVar2;
+  } else {
+    std::string lit = readStringAtAddress(state, arguments[1]);
+    right = StrLiteralExpr::create(lit);
+  }
+
+  // If both are literals (neither is symbolic), just compare directly
+  if (strVar1.isNull() && strVar2.isNull()) {
+    StrLiteralExpr *l = cast<StrLiteralExpr>(left);
+    StrLiteralExpr *r = cast<StrLiteralExpr>(right);
+    int cmp = l->getValue().compare(r->getValue());
+    executor.bindLocal(target, state, ConstantExpr::alloc(cmp, Expr::Int32));
+    return;
+  }
+
+  ref<Expr> eqExpr = StrEqExpr::create(left, right);
+  Executor::StatePair sp =
+      executor.fork(state, eqExpr, false, BranchType::StrEq);
+  if (sp.first)
+    executor.bindLocal(target, *sp.first,
+                       ConstantExpr::alloc(0, Expr::Int32));
+  if (sp.second)
+    executor.bindLocal(target, *sp.second,
+                       ConstantExpr::alloc(1, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleStrlenStr(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 1 && "invalid number of arguments to strlen");
+
+  ref<Expr> strVar;
+  {
+    ObjectPair op;
+    ref<Expr> addr = executor.toUnique(state, arguments[0]);
+    if (isa<klee::ConstantExpr>(addr) &&
+        state.addressSpace.resolveOne(cast<klee::ConstantExpr>(addr), op)) {
+      auto it = state.stringBackedBuffers.find(op.first->id);
+      if (it != state.stringBackedBuffers.end())
+        strVar = it->second;
+    }
+  }
+  if (strVar.isNull()) {
+    // Not string-backed — fall back to concrete strlen
+    std::string str = readStringAtAddress(state, arguments[0]);
+    executor.bindLocal(
+        target, state,
+        ConstantExpr::alloc(str.length(), Expr::Int64));
+    return;
+  }
+
+  executor.bindLocal(target, state, StrLenExpr::create(strVar));
+}
+
+void SpecialFunctionHandler::handleStrstrStr(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 && "invalid number of arguments to strstr");
+
+  ref<Expr> strVar;
+  {
+    ObjectPair op;
+    ref<Expr> addr = executor.toUnique(state, arguments[0]);
+    if (isa<klee::ConstantExpr>(addr) &&
+        state.addressSpace.resolveOne(cast<klee::ConstantExpr>(addr), op)) {
+      auto it = state.stringBackedBuffers.find(op.first->id);
+      if (it != state.stringBackedBuffers.end())
+        strVar = it->second;
+    }
+  }
+  if (strVar.isNull()) {
+    executor.terminateStateOnUserError(
+        state, "strstr: first argument is not a string-backed symbolic buffer");
+    return;
+  }
+
+  std::string needle = readStringAtAddress(state, arguments[1]);
+  ref<Expr> needleExpr = StrLiteralExpr::create(needle);
+  ref<Expr> containsExpr = StrContainsExpr::create(strVar, needleExpr);
+
+  Executor::StatePair sp =
+      executor.fork(state, containsExpr, false, BranchType::StrEq);
+  if (sp.first) // contains → return non-NULL (original pointer)
+    executor.bindLocal(target, *sp.first, arguments[0]);
+  if (sp.second) // doesn't contain → return NULL
+    executor.bindLocal(target, *sp.second,
+                       ConstantExpr::alloc(0, Context::get().getPointerWidth()));
 }

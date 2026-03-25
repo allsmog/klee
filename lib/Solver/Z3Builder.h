@@ -166,6 +166,14 @@ private:
 
   Z3SortHandle getBvSort(unsigned width);
   Z3SortHandle getArraySort(Z3SortHandle domainSort, Z3SortHandle rangeSort);
+
+  // String theory support
+  Z3SortHandle getStringSort();
+  Z3ASTHandle mkStringVar(const std::string &name);
+  Z3ASTHandle mkStringLiteral(const std::string &value);
+  Z3ASTHandle buildRegex(const std::string &pattern);
+  std::unordered_map<std::string, Z3ASTHandle> _string_var_cache;
+
   bool autoClearConstructCache;
   std::string z3LogInteractionFile;
 
@@ -187,7 +195,15 @@ public:
     return res;
   }
 
-  void clearConstructCache() { constructed.clear(); }
+  void clearConstructCache() {
+    constructed.clear();
+    _string_var_cache.clear();
+  }
+
+  /// Get or create a Z3 string variable by name (for model extraction).
+  Z3ASTHandle getStringVar(const std::string &name) {
+    return mkStringVar(name);
+  }
 };
 }
 

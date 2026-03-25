@@ -216,6 +216,13 @@ public:
   // FIXME: Move to a shared list structure (not critical).
   std::vector<std::pair<ref<const MemoryObject>, const Array *>> symbolics;
 
+  /// @brief Ordered list of symbolic strings: used to generate test cases.
+  std::vector<std::pair<std::string, ref<Expr>>> symbolicStrings;
+
+  /// @brief Maps MemoryObject IDs to Z3 string variables for buffers that
+  /// have dual representation (byte array + string theory variable).
+  std::map<unsigned, ref<Expr>> stringBackedBuffers;
+
   /// @brief A set of boolean expressions
   /// the user has requested be true of a counterexample.
   ImmutableSet<ref<Expr>> cexPreferences;

@@ -114,7 +114,9 @@ public:
   static const Width Int256 = 256;
   static const Width Int512 = 512;
   static const Width MaxWidth = Int512;
-  
+
+  /// Sentinel width for string-typed expressions (uses Z3 string sort).
+  static const Width String = 0;
 
   enum Kind {
     InvalidKind = -1,
@@ -174,7 +176,19 @@ public:
     Sgt, ///< Not used in canonical form
     Sge, ///< Not used in canonical form
 
-    LastKind=Sge,
+    // String operations (symbolic string support via Z3 string theory)
+    StrVar,       ///< Symbolic string variable
+    StrLiteral,   ///< Concrete string literal
+    StrEq,        ///< String equality (returns Bool)
+    StrLen,       ///< String length (returns Int64)
+    StrConcat,    ///< String concatenation (returns String)
+    StrContains,  ///< String containment (returns Bool)
+    StrIndexOf,   ///< Index of substring (returns Int64)
+    StrCharAt,    ///< Character at index (returns Int8)
+    StrSubstr,       ///< Substring extraction (returns String)
+    StrMatchesRegex, ///< Regex membership test (returns Bool)
+
+    LastKind=StrMatchesRegex,
 
     CastKindFirst=ZExt,
     CastKindLast=SExt,
@@ -1183,6 +1197,365 @@ inline bool Expr::isFalse() const {
     return CE->isFalse();
   return false;
 }
+
+// =============================================================================
+// String Expressions — Symbolic string support via Z3 string theory
+// =============================================================================
+
+/// Symbolic string variable.
+class StrVarExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrVar;
+  static const unsigned numKids = 0;
+
+private:
+  std::string name;
+
+  StrVarExpr(const std::string &_name) : name(_name) {}
+
+public:
+  static ref<Expr> alloc(const std::string &name) {
+    ref<Expr> r(new StrVarExpr(name));
+    r->computeHash();
+    return r;
+  }
+
+  static ref<Expr> create(const std::string &name) { return alloc(name); }
+
+  const std::string &getName() const { return name; }
+  Width getWidth() const { return String; }
+  Kind getKind() const { return StrVar; }
+  unsigned getNumKids() const { return 0; }
+  ref<Expr> getKid(unsigned i) const { return 0; }
+
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return alloc(name); }
+  unsigned computeHash();
+
+  int compareContents(const Expr &b) const {
+    return name.compare(static_cast<const StrVarExpr &>(b).name);
+  }
+
+  static bool classof(const Expr *E) { return E->getKind() == Expr::StrVar; }
+  static bool classof(const StrVarExpr *) { return true; }
+};
+
+/// Concrete string literal.
+class StrLiteralExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrLiteral;
+  static const unsigned numKids = 0;
+
+private:
+  std::string value;
+
+  StrLiteralExpr(const std::string &_value) : value(_value) {}
+
+public:
+  static ref<Expr> alloc(const std::string &value) {
+    ref<Expr> r(new StrLiteralExpr(value));
+    r->computeHash();
+    return r;
+  }
+
+  static ref<Expr> create(const std::string &value) { return alloc(value); }
+
+  const std::string &getValue() const { return value; }
+  Width getWidth() const { return String; }
+  Kind getKind() const { return StrLiteral; }
+  unsigned getNumKids() const { return 0; }
+  ref<Expr> getKid(unsigned i) const { return 0; }
+
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return alloc(value); }
+  unsigned computeHash();
+
+  int compareContents(const Expr &b) const {
+    return value.compare(static_cast<const StrLiteralExpr &>(b).value);
+  }
+
+  static bool classof(const Expr *E) {
+    return E->getKind() == Expr::StrLiteral;
+  }
+  static bool classof(const StrLiteralExpr *) { return true; }
+};
+
+/// String equality — returns Bool.
+class StrEqExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrEq;
+  static const unsigned numKids = 2;
+
+  ref<Expr> left, right;
+
+private:
+  StrEqExpr(const ref<Expr> &l, const ref<Expr> &r) : left(l), right(r) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &l, const ref<Expr> &r) {
+    ref<Expr> e(new StrEqExpr(l, r));
+    e->computeHash();
+    return e;
+  }
+
+  static ref<Expr> create(const ref<Expr> &l, const ref<Expr> &r) {
+    return alloc(l, r);
+  }
+
+  Width getWidth() const { return Bool; }
+  Kind getKind() const { return StrEq; }
+  unsigned getNumKids() const { return 2; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? left : right; }
+
+  ref<Expr> rebuild(ref<Expr> kids[]) const {
+    return create(kids[0], kids[1]);
+  }
+
+  int compareContents(const Expr &b) const { return 0; }
+
+  static bool classof(const Expr *E) { return E->getKind() == Expr::StrEq; }
+  static bool classof(const StrEqExpr *) { return true; }
+};
+
+/// String length — returns Int64.
+class StrLenExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrLen;
+  static const unsigned numKids = 1;
+
+  ref<Expr> str;
+
+private:
+  StrLenExpr(const ref<Expr> &s) : str(s) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &s) {
+    ref<Expr> e(new StrLenExpr(s));
+    e->computeHash();
+    return e;
+  }
+
+  static ref<Expr> create(const ref<Expr> &s) { return alloc(s); }
+
+  Width getWidth() const { return Int64; }
+  Kind getKind() const { return StrLen; }
+  unsigned getNumKids() const { return 1; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? str : ref<Expr>(0); }
+
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return create(kids[0]); }
+
+  int compareContents(const Expr &b) const { return 0; }
+
+  static bool classof(const Expr *E) { return E->getKind() == Expr::StrLen; }
+  static bool classof(const StrLenExpr *) { return true; }
+};
+
+/// String concatenation — returns String.
+class StrConcatExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrConcat;
+  static const unsigned numKids = 2;
+  ref<Expr> left, right;
+
+private:
+  StrConcatExpr(const ref<Expr> &l, const ref<Expr> &r) : left(l), right(r) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &l, const ref<Expr> &r) {
+    ref<Expr> e(new StrConcatExpr(l, r));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(const ref<Expr> &l, const ref<Expr> &r) {
+    return alloc(l, r);
+  }
+  Width getWidth() const { return String; }
+  Kind getKind() const { return StrConcat; }
+  unsigned getNumKids() const { return 2; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? left : right; }
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return create(kids[0], kids[1]); }
+  int compareContents(const Expr &b) const { return 0; }
+  static bool classof(const Expr *E) { return E->getKind() == Expr::StrConcat; }
+  static bool classof(const StrConcatExpr *) { return true; }
+};
+
+/// String containment — returns Bool.
+class StrContainsExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrContains;
+  static const unsigned numKids = 2;
+  ref<Expr> str, substr;
+
+private:
+  StrContainsExpr(const ref<Expr> &s, const ref<Expr> &sub)
+      : str(s), substr(sub) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &s, const ref<Expr> &sub) {
+    ref<Expr> e(new StrContainsExpr(s, sub));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(const ref<Expr> &s, const ref<Expr> &sub) {
+    return alloc(s, sub);
+  }
+  Width getWidth() const { return Bool; }
+  Kind getKind() const { return StrContains; }
+  unsigned getNumKids() const { return 2; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? str : substr; }
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return create(kids[0], kids[1]); }
+  int compareContents(const Expr &b) const { return 0; }
+  static bool classof(const Expr *E) {
+    return E->getKind() == Expr::StrContains;
+  }
+  static bool classof(const StrContainsExpr *) { return true; }
+};
+
+/// Index of substring — returns Int64 (-1 if not found).
+class StrIndexOfExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrIndexOf;
+  static const unsigned numKids = 2;
+  ref<Expr> str, substr;
+
+private:
+  StrIndexOfExpr(const ref<Expr> &s, const ref<Expr> &sub)
+      : str(s), substr(sub) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &s, const ref<Expr> &sub) {
+    ref<Expr> e(new StrIndexOfExpr(s, sub));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(const ref<Expr> &s, const ref<Expr> &sub) {
+    return alloc(s, sub);
+  }
+  Width getWidth() const { return Int64; }
+  Kind getKind() const { return StrIndexOf; }
+  unsigned getNumKids() const { return 2; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? str : substr; }
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return create(kids[0], kids[1]); }
+  int compareContents(const Expr &b) const { return 0; }
+  static bool classof(const Expr *E) {
+    return E->getKind() == Expr::StrIndexOf;
+  }
+  static bool classof(const StrIndexOfExpr *) { return true; }
+};
+
+/// Character at index — returns Int8.
+class StrCharAtExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrCharAt;
+  static const unsigned numKids = 2;
+  ref<Expr> str, index;
+
+private:
+  StrCharAtExpr(const ref<Expr> &s, const ref<Expr> &idx)
+      : str(s), index(idx) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &s, const ref<Expr> &idx) {
+    ref<Expr> e(new StrCharAtExpr(s, idx));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(const ref<Expr> &s, const ref<Expr> &idx) {
+    return alloc(s, idx);
+  }
+  Width getWidth() const { return Int8; }
+  Kind getKind() const { return StrCharAt; }
+  unsigned getNumKids() const { return 2; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? str : index; }
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return create(kids[0], kids[1]); }
+  int compareContents(const Expr &b) const { return 0; }
+  static bool classof(const Expr *E) {
+    return E->getKind() == Expr::StrCharAt;
+  }
+  static bool classof(const StrCharAtExpr *) { return true; }
+};
+
+/// Substring extraction — returns String.
+class StrSubstrExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrSubstr;
+  static const unsigned numKids = 3;
+  ref<Expr> str, offset, length;
+
+private:
+  StrSubstrExpr(const ref<Expr> &s, const ref<Expr> &off, const ref<Expr> &len)
+      : str(s), offset(off), length(len) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &s, const ref<Expr> &off,
+                         const ref<Expr> &len) {
+    ref<Expr> e(new StrSubstrExpr(s, off, len));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(const ref<Expr> &s, const ref<Expr> &off,
+                          const ref<Expr> &len) {
+    return alloc(s, off, len);
+  }
+  Width getWidth() const { return String; }
+  Kind getKind() const { return StrSubstr; }
+  unsigned getNumKids() const { return 3; }
+  ref<Expr> getKid(unsigned i) const {
+    switch (i) {
+    case 0: return str;
+    case 1: return offset;
+    case 2: return length;
+    default: return 0;
+    }
+  }
+  ref<Expr> rebuild(ref<Expr> kids[]) const {
+    return create(kids[0], kids[1], kids[2]);
+  }
+  int compareContents(const Expr &b) const { return 0; }
+  static bool classof(const Expr *E) {
+    return E->getKind() == Expr::StrSubstr;
+  }
+  static bool classof(const StrSubstrExpr *) { return true; }
+};
+
+/// Regex membership test — returns Bool.
+class StrMatchesRegexExpr : public NonConstantExpr {
+public:
+  static const Kind kind = StrMatchesRegex;
+  static const unsigned numKids = 1;
+
+  ref<Expr> str;
+  std::string pattern;
+
+private:
+  StrMatchesRegexExpr(const ref<Expr> &s, const std::string &p)
+      : str(s), pattern(p) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &s, const std::string &p) {
+    ref<Expr> e(new StrMatchesRegexExpr(s, p));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(const ref<Expr> &s, const std::string &p) {
+    return alloc(s, p);
+  }
+  const std::string &getPattern() const { return pattern; }
+  Width getWidth() const { return Bool; }
+  Kind getKind() const { return StrMatchesRegex; }
+  unsigned getNumKids() const { return 1; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? str : ref<Expr>(0); }
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return create(kids[0], pattern); }
+  unsigned computeHash();
+
+  int compareContents(const Expr &b) const {
+    return pattern.compare(
+        static_cast<const StrMatchesRegexExpr &>(b).pattern);
+  }
+
+  static bool classof(const Expr *E) {
+    return E->getKind() == Expr::StrMatchesRegex;
+  }
+  static bool classof(const StrMatchesRegexExpr *) { return true; }
+};
 
 } // End klee namespace
 

@@ -854,10 +854,217 @@ Z3ASTHandle Z3Builder::constructActual(ref<Expr> e, int *width_out) {
   case Expr::Sge:
 #endif
 
+  // String operations
+  case Expr::StrVar: {
+    StrVarExpr *sv = cast<StrVarExpr>(e);
+    if (width_out)
+      *width_out = 0;
+    return mkStringVar(sv->getName());
+  }
+
+  case Expr::StrLiteral: {
+    StrLiteralExpr *sl = cast<StrLiteralExpr>(e);
+    if (width_out)
+      *width_out = 0;
+    return mkStringLiteral(sl->getValue());
+  }
+
+  case Expr::StrEq: {
+    Z3ASTHandle left = construct(e->getKid(0), 0);
+    Z3ASTHandle right = construct(e->getKid(1), 0);
+    if (width_out)
+      *width_out = 1;
+    return Z3ASTHandle(Z3_mk_eq(ctx, left, right), ctx);
+  }
+
+  case Expr::StrLen: {
+    Z3ASTHandle str = construct(e->getKid(0), 0);
+    Z3ASTHandle lenInt(Z3_mk_seq_length(ctx, str), ctx);
+    if (width_out)
+      *width_out = 64;
+    return Z3ASTHandle(Z3_mk_int2bv(ctx, 64, lenInt), ctx);
+  }
+
+  case Expr::StrConcat: {
+    Z3ASTHandle left = construct(e->getKid(0), 0);
+    Z3ASTHandle right = construct(e->getKid(1), 0);
+    Z3_ast args[2] = {left, right};
+    if (width_out)
+      *width_out = 0;
+    return Z3ASTHandle(Z3_mk_seq_concat(ctx, 2, args), ctx);
+  }
+
+  case Expr::StrContains: {
+    Z3ASTHandle str = construct(e->getKid(0), 0);
+    Z3ASTHandle substr = construct(e->getKid(1), 0);
+    if (width_out)
+      *width_out = 1;
+    return Z3ASTHandle(Z3_mk_seq_contains(ctx, str, substr), ctx);
+  }
+
+  case Expr::StrIndexOf: {
+    Z3ASTHandle str = construct(e->getKid(0), 0);
+    Z3ASTHandle substr = construct(e->getKid(1), 0);
+    // Search from offset 0
+    Z3ASTHandle zero(Z3_mk_int(ctx, 0, Z3_mk_int_sort(ctx)), ctx);
+    Z3ASTHandle idxInt(Z3_mk_seq_index(ctx, str, substr, zero), ctx);
+    if (width_out)
+      *width_out = 64;
+    return Z3ASTHandle(Z3_mk_int2bv(ctx, 64, idxInt), ctx);
+  }
+
+  case Expr::StrCharAt: {
+    Z3ASTHandle str = construct(e->getKid(0), 0);
+    Z3ASTHandle idx = construct(e->getKid(1), 0);
+    // Convert BV64 index to Z3 Int
+    Z3ASTHandle idxInt(Z3_mk_bv2int(ctx, idx, false), ctx);
+    // Z3_mk_seq_nth returns an Int (character code)
+    Z3ASTHandle charInt(Z3_mk_seq_nth(ctx, str, idxInt), ctx);
+    if (width_out)
+      *width_out = 8;
+    return Z3ASTHandle(Z3_mk_int2bv(ctx, 8, charInt), ctx);
+  }
+
+  case Expr::StrMatchesRegex: {
+    StrMatchesRegexExpr *re = cast<StrMatchesRegexExpr>(e);
+    Z3ASTHandle str = construct(re->getKid(0), 0);
+    Z3ASTHandle regex = buildRegex(re->getPattern());
+    if (width_out)
+      *width_out = 1;
+    return Z3ASTHandle(Z3_mk_seq_in_re(ctx, str, regex), ctx);
+  }
+
+  case Expr::StrSubstr: {
+    Z3ASTHandle str = construct(e->getKid(0), 0);
+    Z3ASTHandle offset = construct(e->getKid(1), 0);
+    Z3ASTHandle length = construct(e->getKid(2), 0);
+    // Convert BV64 offset/length to Z3 Int
+    Z3ASTHandle offInt(Z3_mk_bv2int(ctx, offset, false), ctx);
+    Z3ASTHandle lenInt(Z3_mk_bv2int(ctx, length, false), ctx);
+    if (width_out)
+      *width_out = 0;
+    return Z3ASTHandle(Z3_mk_seq_extract(ctx, str, offInt, lenInt), ctx);
+  }
+
   default:
     assert(0 && "unhandled Expr type");
     return getTrue();
   }
 }
+
+Z3SortHandle Z3Builder::getStringSort() {
+  return Z3SortHandle(Z3_mk_string_sort(ctx), ctx);
+}
+
+Z3ASTHandle Z3Builder::mkStringVar(const std::string &name) {
+  auto it = _string_var_cache.find(name);
+  if (it != _string_var_cache.end())
+    return it->second;
+  Z3_symbol s = Z3_mk_string_symbol(ctx, name.c_str());
+  Z3ASTHandle var(Z3_mk_const(ctx, s, getStringSort()), ctx);
+  _string_var_cache[name] = var;
+  return var;
+}
+
+Z3ASTHandle Z3Builder::mkStringLiteral(const std::string &value) {
+  return Z3ASTHandle(Z3_mk_string(ctx, value.c_str()), ctx);
+}
+
+// Simple regex pattern parser for Z3 regex AST construction.
+// Supports: literals, [a-z] ranges, ., *, +, ?, |, (), \\-escapes
+Z3ASTHandle Z3Builder::buildRegex(const std::string &pattern) {
+  std::vector<Z3ASTHandle> parts;
+  Z3SortHandle strSort = getStringSort();
+  Z3SortHandle reSort(Z3_mk_re_sort(ctx, strSort), ctx);
+  size_t i = 0;
+  size_t n = pattern.size();
+
+  auto mkCharRe = [&](char c) -> Z3ASTHandle {
+    char s[2] = {c, 0};
+    Z3ASTHandle lit(Z3_mk_string(ctx, s), ctx);
+    return Z3ASTHandle(Z3_mk_seq_to_re(ctx, lit), ctx);
+  };
+
+  while (i < n) {
+    Z3ASTHandle atom(nullptr, nullptr);
+
+    if (pattern[i] == '.') {
+      atom = Z3ASTHandle(Z3_mk_re_allchar(ctx, reSort), ctx);
+      i++;
+    } else if (pattern[i] == '[' && i + 4 <= n && pattern[i + 2] == '-' &&
+               i + 4 < n && pattern[i + 4] == ']') {
+      // Character range [a-z]
+      char lo = pattern[i + 1], hi = pattern[i + 3];
+      char slo[2] = {lo, 0}, shi[2] = {hi, 0};
+      Z3ASTHandle loH(Z3_mk_string(ctx, slo), ctx);
+      Z3ASTHandle hiH(Z3_mk_string(ctx, shi), ctx);
+      atom = Z3ASTHandle(Z3_mk_re_range(ctx, loH, hiH), ctx);
+      i += 5;
+    } else if (pattern[i] == '\\' && i + 1 < n) {
+      atom = mkCharRe(pattern[i + 1]);
+      i += 2;
+    } else if (pattern[i] == '(') {
+      // Find matching ')'
+      int depth = 1;
+      size_t start = i + 1;
+      i++;
+      while (i < n && depth > 0) {
+        if (pattern[i] == '(') depth++;
+        else if (pattern[i] == ')') depth--;
+        i++;
+      }
+      atom = buildRegex(pattern.substr(start, i - start - 1));
+    } else if (pattern[i] == '|') {
+      // Union: concat everything so far as left, parse rest as right
+      Z3ASTHandle left(nullptr, nullptr);
+      if (parts.empty()) {
+        char s[2] = {0, 0};
+        left = Z3ASTHandle(Z3_mk_seq_to_re(ctx, Z3_mk_string(ctx, s)), ctx);
+      } else if (parts.size() == 1) {
+        left = parts[0];
+      } else {
+        Z3_ast arr[64];
+        for (size_t j = 0; j < parts.size() && j < 64; j++) arr[j] = parts[j];
+        left = Z3ASTHandle(
+            Z3_mk_re_concat(ctx, (unsigned)parts.size(), arr), ctx);
+      }
+      Z3ASTHandle right = buildRegex(pattern.substr(i + 1));
+      Z3_ast unionArgs[2] = {left, right};
+      return Z3ASTHandle(Z3_mk_re_union(ctx, 2, unionArgs), ctx);
+    } else {
+      atom = mkCharRe(pattern[i]);
+      i++;
+    }
+
+    // Check for quantifiers
+    if (atom.operator Z3_ast() && i < n) {
+      if (pattern[i] == '*') {
+        atom = Z3ASTHandle(Z3_mk_re_star(ctx, atom), ctx);
+        i++;
+      } else if (pattern[i] == '+') {
+        atom = Z3ASTHandle(Z3_mk_re_plus(ctx, atom), ctx);
+        i++;
+      } else if (pattern[i] == '?') {
+        atom = Z3ASTHandle(Z3_mk_re_option(ctx, atom), ctx);
+        i++;
+      }
+    }
+
+    if (atom.operator Z3_ast())
+      parts.push_back(atom);
+  }
+
+  if (parts.empty()) {
+    return Z3ASTHandle(
+        Z3_mk_seq_to_re(ctx, Z3_mk_string(ctx, "")), ctx);
+  }
+  if (parts.size() == 1)
+    return parts[0];
+
+  Z3_ast arr[64];
+  for (size_t j = 0; j < parts.size() && j < 64; j++) arr[j] = parts[j];
+  return Z3ASTHandle(Z3_mk_re_concat(ctx, (unsigned)parts.size(), arr), ctx);
+}
+
 }
 #endif // ENABLE_Z3

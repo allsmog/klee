@@ -164,6 +164,16 @@ void Expr::printKind(llvm::raw_ostream &os, Kind k) {
     X(Sle);
     X(Sgt);
     X(Sge);
+    X(StrVar);
+    X(StrLiteral);
+    X(StrEq);
+    X(StrLen);
+    X(StrConcat);
+    X(StrContains);
+    X(StrIndexOf);
+    X(StrCharAt);
+    X(StrSubstr);
+    X(StrMatchesRegex);
 #undef X
   default:
     assert(0 && "invalid kind");
@@ -224,6 +234,27 @@ unsigned NotExpr::computeHash() {
   return hashValue;
 }
 
+unsigned StrVarExpr::computeHash() {
+  hashValue = Expr::StrVar;
+  for (char c : name)
+    hashValue = hashValue * Expr::MAGIC_HASH_CONSTANT + (unsigned)c;
+  return hashValue;
+}
+
+unsigned StrLiteralExpr::computeHash() {
+  hashValue = Expr::StrLiteral;
+  for (char c : value)
+    hashValue = hashValue * Expr::MAGIC_HASH_CONSTANT + (unsigned)c;
+  return hashValue;
+}
+
+unsigned StrMatchesRegexExpr::computeHash() {
+  hashValue = str->hash() * Expr::MAGIC_HASH_CONSTANT * Expr::StrMatchesRegex;
+  for (char c : pattern)
+    hashValue = hashValue * Expr::MAGIC_HASH_CONSTANT + (unsigned)c;
+  return hashValue;
+}
+
 ref<Expr> Expr::createFromKind(Kind k, std::vector<CreateArg> args) {
   unsigned numArgs = args.size();
   (void) numArgs;
@@ -232,6 +263,16 @@ ref<Expr> Expr::createFromKind(Kind k, std::vector<CreateArg> args) {
     case Constant:
     case Extract:
     case Read:
+    case StrVar:
+    case StrLiteral:
+    case StrEq:
+    case StrLen:
+    case StrConcat:
+    case StrContains:
+    case StrIndexOf:
+    case StrCharAt:
+    case StrSubstr:
+    case StrMatchesRegex:
     default:
       assert(0 && "invalid kind");
 

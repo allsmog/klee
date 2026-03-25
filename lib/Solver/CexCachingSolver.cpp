@@ -277,8 +277,12 @@ bool CexCachingSolver::computeValidity(const Query& query,
     return false;
   assert(a && "computeValidity() must have assignment");
   ref<Expr> q = a->evaluate(query.expr);
-  assert(isa<ConstantExpr>(q) && 
-         "assignment evaluation did not result in constant");
+
+  // String expressions cannot be evaluated by Assignment (they use Z3's
+  // string theory, not bitvector arrays). Fall through to the underlying
+  // solver in that case.
+  if (!isa<ConstantExpr>(q))
+    return solver->impl->computeValidity(query, result);
 
   if (cast<ConstantExpr>(q)->isTrue()) {
     if (!getAssignment(query, a))
@@ -314,9 +318,13 @@ bool CexCachingSolver::computeValue(const Query& query,
   if (!getAssignment(query.withFalse(), a))
     return false;
   assert(a && "computeValue() must have assignment");
-  result = a->evaluate(query.expr);  
-  assert(isa<ConstantExpr>(result) && 
-         "assignment evaluation did not result in constant");
+  result = a->evaluate(query.expr);
+
+  // String expressions cannot be evaluated by Assignment. Fall through
+  // to the underlying solver.
+  if (!isa<ConstantExpr>(result))
+    return solver->impl->computeValue(query, result);
+
   return true;
 }
 

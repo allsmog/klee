@@ -88,6 +88,16 @@ ref<Expr> ExprVisitor::visitActual(const ref<Expr> &e) {
     case Expr::Sle: res = visitSle(static_cast<SleExpr&>(ep)); break;
     case Expr::Sgt: res = visitSgt(static_cast<SgtExpr&>(ep)); break;
     case Expr::Sge: res = visitSge(static_cast<SgeExpr&>(ep)); break;
+    case Expr::StrVar: res = visitStrVar(static_cast<StrVarExpr&>(ep)); break;
+    case Expr::StrLiteral: res = visitStrLiteral(static_cast<StrLiteralExpr&>(ep)); break;
+    case Expr::StrEq: res = visitStrEq(static_cast<StrEqExpr&>(ep)); break;
+    case Expr::StrLen: res = visitStrLen(static_cast<StrLenExpr&>(ep)); break;
+    case Expr::StrConcat: res = visitStrConcat(static_cast<StrConcatExpr&>(ep)); break;
+    case Expr::StrContains: res = visitStrContains(static_cast<StrContainsExpr&>(ep)); break;
+    case Expr::StrIndexOf: res = visitStrIndexOf(static_cast<StrIndexOfExpr&>(ep)); break;
+    case Expr::StrCharAt: res = visitStrCharAt(static_cast<StrCharAtExpr&>(ep)); break;
+    case Expr::StrSubstr: res = visitStrSubstr(static_cast<StrSubstrExpr&>(ep)); break;
+    case Expr::StrMatchesRegex: res = visitStrMatchesRegex(static_cast<StrMatchesRegexExpr&>(ep)); break;
     case Expr::Constant:
     default:
       assert(0 && "invalid expression kind");
@@ -255,6 +265,46 @@ ExprVisitor::Action ExprVisitor::visitSgt(const SgtExpr&) {
 }
 
 ExprVisitor::Action ExprVisitor::visitSge(const SgeExpr&) {
-  return Action::doChildren(); 
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrVar(const StrVarExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrLiteral(const StrLiteralExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrEq(const StrEqExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrLen(const StrLenExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrConcat(const StrConcatExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrContains(const StrContainsExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrIndexOf(const StrIndexOfExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrCharAt(const StrCharAtExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrSubstr(const StrSubstrExpr&) {
+  return Action::doChildren();
+}
+
+ExprVisitor::Action ExprVisitor::visitStrMatchesRegex(const StrMatchesRegexExpr&) {
+  return Action::doChildren();
 }
 

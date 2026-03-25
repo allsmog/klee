@@ -119,6 +119,18 @@ namespace klee {
     HANDLER(handleUnderConstrained);
     HANDLER(handleWarning);
     HANDLER(handleWarningOnce);
+    HANDLER(handleMakeSymbolicString);
+    HANDLER(handleStringEq);
+    HANDLER(handleStringLength);
+    HANDLER(handleStringConcat);
+    HANDLER(handleStringContains);
+    HANDLER(handleStringIndexOf);
+    HANDLER(handleStringCharAt);
+    HANDLER(handleStringSubstr);
+    HANDLER(handleStringMatchesRegex);
+    HANDLER(handleStrcmpStr);
+    HANDLER(handleStrlenStr);
+    HANDLER(handleStrstrStr);
 #undef HANDLER
   };
 } // End klee namespace

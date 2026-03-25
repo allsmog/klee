@@ -158,6 +158,28 @@ extern "C" {
 
   /* Get errno value of the current state */
   int klee_get_errno(void);
+
+  /* Symbolic string support (requires Z3 solver backend).
+   *
+   * klee_make_symbolic_string - Create a symbolic string. Returns an opaque
+   * handle that can be passed to klee_string_eq and klee_string_length.
+   *
+   * klee_string_eq - Check if a symbolic string equals a literal. Returns 1
+   * if equal, 0 otherwise. KLEE will fork on this condition.
+   *
+   * klee_string_length - Get the symbolic length of a string. Returns a
+   * symbolic size_t that can be used in integer comparisons.
+   */
+  const char *klee_make_symbolic_string(const char *name);
+  int klee_string_eq(const char *symbolic_str, const char *literal);
+  size_t klee_string_length(const char *symbolic_str);
+  const char *klee_string_concat(const char *s1, const char *s2);
+  int klee_string_contains(const char *str, const char *substr);
+  long klee_string_indexof(const char *str, const char *substr);
+  char klee_string_char_at(const char *str, size_t index);
+  const char *klee_string_substr(const char *str, size_t offset, size_t length);
+  int klee_string_matches_regex(const char *symbolic_str, const char *pattern);
+
 #ifdef __cplusplus
 }
 #endif

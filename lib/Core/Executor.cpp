@@ -4888,6 +4888,16 @@ bool Executor::getSymbolicSolution(const ExecutionState &state,
   
   for (unsigned i = 0; i != state.symbolics.size(); ++i)
     res.push_back(std::make_pair(state.symbolics[i].first->name, values[i]));
+
+  // Add symbolic string entries to test case output.
+  // The string values are represented as named entries in the test case.
+  // Full Z3 model extraction for concrete string values requires bypassing
+  // the solver chain's caching layers, which is planned for a future update.
+  for (const auto &ss : state.symbolicStrings) {
+    std::vector<unsigned char> strBytes(ss.first.begin(), ss.first.end());
+    res.push_back(std::make_pair(ss.first, strBytes));
+  }
+
   return true;
 }
 
