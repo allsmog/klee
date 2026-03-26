@@ -127,6 +127,7 @@ static constexpr std::array handlerInfo = {
   add("strchr", handleStrchrStr, true),
   add("strncmp", handleStrncmpStr, true),
   add("memcmp", handleMemcmpStr, true),
+  add("klee_make_symbolic_std_string", handleMakeSymbolicStdString, false),
   add("klee_mark_global", handleMarkGlobal, false),
   add("klee_open_merge", handleOpenMerge, false),
   add("klee_close_merge", handleCloseMerge, false),
@@ -208,6 +209,7 @@ void SpecialFunctionHandler::bind() {
     if (f && (!hi.doNotOverride || f->isDeclaration()))
       handlers[f] = std::make_pair(hi.handler, hi.hasReturnValue);
   }
+
 }
 
 
@@ -1346,4 +1348,77 @@ void SpecialFunctionHandler::handleMemcmpStr(
 
   // memcmp is identical to strncmp for string-backed buffers
   handleStrncmpStr(state, target, arguments);
+}
+
+void SpecialFunctionHandler::handleMakeSymbolicStdString(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 3 &&
+         "invalid number of arguments to klee_make_symbolic_std_string");
+
+  // args: (void *std_string_ptr, size_t max_len, const char *name)
+  ref<Expr> strPtr = arguments[0];
+  ref<Expr> maxLenExpr = executor.toUnique(state, arguments[1]);
+  std::string name = readStringAtAddress(state, arguments[2]);
+
+  if (!isa<klee::ConstantExpr>(maxLenExpr)) {
+    executor.terminateStateOnUserError(
+        state, "klee_make_symbolic_std_string: max_len must be concrete");
+    return;
+  }
+  uint64_t maxLen = cast<klee::ConstantExpr>(maxLenExpr)->getZExtValue();
+  if (maxLen == 0 || maxLen > 4096) maxLen = 256;
+
+  // Resolve the std::string pointer
+  Executor::ExactResolutionList rl;
+  executor.resolveExact(state, strPtr, rl, "make_symbolic_std_string");
+
+  for (auto &it : rl) {
+    const MemoryObject *strMo = it.first.first;
+    const ObjectState *strOs = it.first.second;
+    ExecutionState *s = it.second;
+
+    // Allocate a backing buffer for the string's character data
+    MemoryObject *bufMo = executor.memory->allocate(
+        maxLen + 1, /*isLocal=*/false, /*isGlobal=*/false,
+        s, s->prevPC->inst, 8);
+    if (!bufMo) {
+      executor.terminateStateOnUserError(
+          *s, "klee_make_symbolic_std_string: failed to allocate buffer");
+      return;
+    }
+
+    // Make the buffer content symbolic
+    executor.executeMakeSymbolic(*s, bufMo, name);
+
+    // Create Z3 string variable linked to this buffer
+    std::string strName = name + "_str";
+    ref<Expr> strVar = StrVarExpr::create(strName);
+    s->stringBackedBuffers[bufMo->id] = strVar;
+    s->symbolicStrings.push_back({name, strVar});
+
+    // Constrain string length < maxLen
+    ref<Expr> lenExpr = StrLenExpr::create(strVar);
+    executor.addConstraint(*s, UltExpr::create(lenExpr,
+        ConstantExpr::alloc(maxLen, Expr::Int64)));
+
+    // Write the std::string struct in "long mode" layout (libc++ arm64/x86_64):
+    //   offset 0: pointer to data (8 bytes)
+    //   offset 8: size (8 bytes) — we use a symbolic length
+    //   offset 16: capacity with MSB set (8 bytes) — marks long mode
+    ObjectState *wos = s->addressSpace.getWriteable(strMo, strOs);
+
+    // Write data pointer (concrete, points to our buffer)
+    ref<Expr> bufAddr = bufMo->getBaseExpr();
+    wos->write(0, bufAddr);  // 64-bit pointer at offset 0
+
+    // Write size = 0 for now. The actual length is tracked symbolically
+    // via the string theory. std::string methods that check size() will
+    // read from the buffer using string-backed intercepts.
+    wos->write(8, ConstantExpr::alloc(0, Expr::Int64));
+
+    // Write capacity with MSB set to indicate long mode
+    uint64_t cap = maxLen | (1ULL << 63);
+    wos->write(16, ConstantExpr::alloc(cap, Expr::Int64));
+  }
 }

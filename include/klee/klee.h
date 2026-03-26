@@ -180,6 +180,14 @@ extern "C" {
   const char *klee_string_substr(const char *str, size_t offset, size_t length);
   int klee_string_matches_regex(const char *symbolic_str, const char *pattern);
 
+  /* Make a std::string symbolic. Sets up the string's internal structure
+   * to point to a symbolic buffer, enabling transparent use of std::string
+   * methods (operator==, find, compare, etc.) with Z3 string theory.
+   * max_len is the maximum length of the symbolic string.
+   */
+  void klee_make_symbolic_std_string(void *std_string_ptr, unsigned long max_len,
+                                     const char *name);
+
 #ifdef __cplusplus
 }
 #endif

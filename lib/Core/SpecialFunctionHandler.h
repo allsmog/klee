@@ -134,6 +134,7 @@ namespace klee {
     HANDLER(handleStrchrStr);
     HANDLER(handleStrncmpStr);
     HANDLER(handleMemcmpStr);
+    HANDLER(handleMakeSymbolicStdString);
 #undef HANDLER
   };
 } // End klee namespace

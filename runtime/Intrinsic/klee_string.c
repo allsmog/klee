@@ -28,3 +28,10 @@ size_t klee_string_length(const char *s) {
   while (*s++) len++;
   return len;
 }
+
+void klee_make_symbolic_std_string(void *str, size_t max_len, const char *name) {
+  /* In replay mode, do nothing — the string is already concrete. */
+  (void)str;
+  (void)max_len;
+  (void)name;
+}
