@@ -131,6 +131,9 @@ namespace klee {
     HANDLER(handleStrcmpStr);
     HANDLER(handleStrlenStr);
     HANDLER(handleStrstrStr);
+    HANDLER(handleStrchrStr);
+    HANDLER(handleStrncmpStr);
+    HANDLER(handleMemcmpStr);
 #undef HANDLER
   };
 } // End klee namespace

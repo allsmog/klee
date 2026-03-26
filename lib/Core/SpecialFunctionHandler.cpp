@@ -124,6 +124,9 @@ static constexpr std::array handlerInfo = {
   add("strcmp", handleStrcmpStr, true),
   add("strlen", handleStrlenStr, true),
   add("strstr", handleStrstrStr, true),
+  add("strchr", handleStrchrStr, true),
+  add("strncmp", handleStrncmpStr, true),
+  add("memcmp", handleMemcmpStr, true),
   add("klee_mark_global", handleMarkGlobal, false),
   add("klee_open_merge", handleOpenMerge, false),
   add("klee_close_merge", handleCloseMerge, false),
@@ -1226,4 +1229,121 @@ void SpecialFunctionHandler::handleStrstrStr(
   if (sp.second) // doesn't contain → return NULL
     executor.bindLocal(target, *sp.second,
                        ConstantExpr::alloc(0, Context::get().getPointerWidth()));
+}
+
+void SpecialFunctionHandler::handleStrchrStr(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 2 && "invalid number of arguments to strchr");
+
+  ref<Expr> strVar;
+  {
+    ObjectPair op;
+    ref<Expr> addr = executor.toUnique(state, arguments[0]);
+    if (isa<klee::ConstantExpr>(addr) &&
+        state.addressSpace.resolveOne(cast<klee::ConstantExpr>(addr), op)) {
+      auto it = state.stringBackedBuffers.find(op.first->id);
+      if (it != state.stringBackedBuffers.end())
+        strVar = it->second;
+    }
+  }
+  if (strVar.isNull()) {
+    // Not string-backed — concrete fallback
+    std::string str = readStringAtAddress(state, arguments[0]);
+    ref<Expr> ch = executor.toUnique(state, arguments[1]);
+    if (isa<klee::ConstantExpr>(ch)) {
+      char c = (char)cast<klee::ConstantExpr>(ch)->getZExtValue();
+      const char *found = nullptr;
+      for (size_t i = 0; i <= str.size(); i++) {
+        if ((i < str.size() ? str[i] : '\0') == c) { found = str.c_str() + i; break; }
+      }
+      if (found)
+        executor.bindLocal(target, state, arguments[0]);
+      else
+        executor.bindLocal(target, state,
+            ConstantExpr::alloc(0, Context::get().getPointerWidth()));
+    } else {
+      executor.terminateStateOnUserError(state, "strchr: symbolic char on non-string-backed buffer");
+    }
+    return;
+  }
+
+  // Build single-char string literal from the char argument
+  ref<Expr> ch = executor.toUnique(state, arguments[1]);
+  if (!isa<klee::ConstantExpr>(ch)) {
+    executor.terminateStateOnUserError(state, "strchr: symbolic char argument not yet supported");
+    return;
+  }
+  char c = (char)cast<klee::ConstantExpr>(ch)->getZExtValue();
+  char s[2] = {c, '\0'};
+  ref<Expr> charStr = StrLiteralExpr::create(std::string(s));
+  ref<Expr> containsExpr = StrContainsExpr::create(strVar, charStr);
+
+  Executor::StatePair sp =
+      executor.fork(state, containsExpr, false, BranchType::StrEq);
+  if (sp.first)
+    executor.bindLocal(target, *sp.first, arguments[0]);
+  if (sp.second)
+    executor.bindLocal(target, *sp.second,
+                       ConstantExpr::alloc(0, Context::get().getPointerWidth()));
+}
+
+void SpecialFunctionHandler::handleStrncmpStr(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 3 && "invalid number of arguments to strncmp");
+
+  auto getStrVar = [&](ref<Expr> ptr) -> ref<Expr> {
+    ObjectPair op;
+    ref<Expr> addr = executor.toUnique(state, ptr);
+    if (!isa<klee::ConstantExpr>(addr)) return ref<Expr>(0);
+    if (!state.addressSpace.resolveOne(cast<klee::ConstantExpr>(addr), op))
+      return ref<Expr>(0);
+    auto it = state.stringBackedBuffers.find(op.first->id);
+    if (it == state.stringBackedBuffers.end()) return ref<Expr>(0);
+    return it->second;
+  };
+
+  ref<Expr> strVar1 = getStrVar(arguments[0]);
+  ref<Expr> strVar2 = getStrVar(arguments[1]);
+
+  if (strVar1.isNull() && strVar2.isNull()) {
+    // Both concrete — compare directly
+    std::string s1 = readStringAtAddress(state, arguments[0]);
+    std::string s2 = readStringAtAddress(state, arguments[1]);
+    ref<Expr> nExpr = executor.toUnique(state, arguments[2]);
+    size_t n = isa<klee::ConstantExpr>(nExpr) ?
+        cast<klee::ConstantExpr>(nExpr)->getZExtValue() : s1.size();
+    int cmp = s1.compare(0, n, s2, 0, n);
+    executor.bindLocal(target, state, ConstantExpr::alloc(cmp, Expr::Int32));
+    return;
+  }
+
+  // At least one is symbolic — use StrSubstr + StrEq
+  ref<Expr> left = strVar1.isNull() ?
+      StrLiteralExpr::create(readStringAtAddress(state, arguments[0])) : strVar1;
+  ref<Expr> right = strVar2.isNull() ?
+      StrLiteralExpr::create(readStringAtAddress(state, arguments[1])) : strVar2;
+
+  ref<Expr> n = arguments[2];
+  ref<Expr> zero = ConstantExpr::alloc(0, Expr::Int64);
+  ref<Expr> sub1 = StrSubstrExpr::create(left, zero, n);
+  ref<Expr> sub2 = StrSubstrExpr::create(right, zero, n);
+  ref<Expr> eqExpr = StrEqExpr::create(sub1, sub2);
+
+  Executor::StatePair sp =
+      executor.fork(state, eqExpr, false, BranchType::StrEq);
+  if (sp.first)
+    executor.bindLocal(target, *sp.first, ConstantExpr::alloc(0, Expr::Int32));
+  if (sp.second)
+    executor.bindLocal(target, *sp.second, ConstantExpr::alloc(1, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handleMemcmpStr(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  assert(arguments.size() == 3 && "invalid number of arguments to memcmp");
+
+  // memcmp is identical to strncmp for string-backed buffers
+  handleStrncmpStr(state, target, arguments);
 }
