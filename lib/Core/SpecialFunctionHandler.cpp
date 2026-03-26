@@ -505,9 +505,12 @@ void SpecialFunctionHandler::handleAssume(ExecutionState &state,
     e = NeExpr::create(e, ConstantExpr::create(0, e->getWidth()));
   
   bool res;
-  bool success __attribute__((unused)) = executor.solver->mustBeFalse(
+  bool success = executor.solver->mustBeFalse(
       state.constraints, e, res, state.queryMetaData);
-  assert(success && "FIXME: Unhandled solver failure");
+  if (!success) {
+    executor.terminateStateOnSolverError(state, "Solver failure in klee_assume");
+    return;
+  }
   if (res) {
     executor.terminateStateOnUserError(
         state, "invalid klee_assume call (provably false)", !SilentKleeAssume);
@@ -608,14 +611,20 @@ void SpecialFunctionHandler::handlePrintRange(ExecutionState &state,
   if (!isa<ConstantExpr>(arguments[1])) {
     // FIXME: Pull into a unique value method?
     ref<ConstantExpr> value;
-    bool success __attribute__((unused)) = executor.solver->getValue(
+    bool success = executor.solver->getValue(
         state.constraints, arguments[1], value, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    if (!success) {
+      executor.terminateStateOnSolverError(state, "Solver failure in print_range");
+      return;
+    }
     bool res;
     success = executor.solver->mustBeTrue(state.constraints,
                                           EqExpr::create(arguments[1], value),
                                           res, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    if (!success) {
+      executor.terminateStateOnSolverError(state, "Solver failure in print_range");
+      return;
+    }
     if (res) {
       llvm::errs() << " == " << value;
     } else { 
@@ -839,13 +848,16 @@ void SpecialFunctionHandler::handleMakeSymbolic(ExecutionState &state,
 
     // FIXME: Type coercion should be done consistently somewhere.
     bool res;
-    bool success __attribute__((unused)) = executor.solver->mustBeTrue(
+    bool success = executor.solver->mustBeTrue(
         s->constraints,
         EqExpr::create(
             ZExtExpr::create(arguments[1], Context::get().getPointerWidth()),
             mo->getSizeExpr()),
         res, s->queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    if (!success) {
+      executor.terminateStateOnSolverError(*s, "Solver failure in make_symbolic");
+      return;
+    }
     
     if (res) {
       executor.executeMakeSymbolic(*s, mo, name);

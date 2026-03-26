@@ -94,14 +94,18 @@ void SeedInfo::patchSeed(const ExecutionState &state,
       bool res;
       bool success =
           solver->mustBeFalse(required, isSeed, res, state.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
-      (void) success;
+      if (!success) {
+        klee_warning("Solver failure during seed patching, skipping seed");
+        return;
+      }
       if (res) {
         ref<ConstantExpr> value;
         bool success =
             solver->getValue(required, read, value, state.queryMetaData);
-        assert(success && "FIXME: Unhandled solver failure");            
-        (void) success;
+        if (!success) {
+          klee_warning("Solver failure during seed patching, skipping seed");
+          return;
+        }
         a->second[i] = value->getZExtValue(8);
         cm.addConstraint(EqExpr::create(
             read, ConstantExpr::alloc(a->second[i], Expr::Int8)));
@@ -115,33 +119,39 @@ void SeedInfo::patchSeed(const ExecutionState &state,
   bool success =
       solver->mayBeTrue(state.constraints, assignment.evaluate(condition), res,
                         state.queryMetaData);
-  assert(success && "FIXME: Unhandled solver failure");
-  (void) success;
+  if (!success) {
+    klee_warning("Solver failure during seed patching, skipping seed");
+    return;
+  }
   if (res)
     return;
-  
+
   // We could still do a lot better than this, for example by looking at
   // independence. But really, this shouldn't be happening often.
-  for (Assignment::bindings_ty::iterator it = assignment.bindings.begin(), 
+  for (Assignment::bindings_ty::iterator it = assignment.bindings.begin(),
          ie = assignment.bindings.end(); it != ie; ++it) {
     const Array *array = it->first;
     for (unsigned i=0; i<array->size; ++i) {
       ref<Expr> read = ReadExpr::create(UpdateList(array, 0),
                                         ConstantExpr::alloc(i, Expr::Int32));
-      ref<Expr> isSeed = EqExpr::create(read, 
-                                        ConstantExpr::alloc(it->second[i], 
+      ref<Expr> isSeed = EqExpr::create(read,
+                                        ConstantExpr::alloc(it->second[i],
                                                             Expr::Int8));
       bool res;
       bool success =
           solver->mustBeFalse(required, isSeed, res, state.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
-      (void) success;
+      if (!success) {
+        klee_warning("Solver failure during seed patching, skipping seed");
+        return;
+      }
       if (res) {
         ref<ConstantExpr> value;
         bool success =
             solver->getValue(required, read, value, state.queryMetaData);
-        assert(success && "FIXME: Unhandled solver failure");            
-        (void) success;
+        if (!success) {
+          klee_warning("Solver failure during seed patching, skipping seed");
+          return;
+        }
         it->second[i] = value->getZExtValue(8);
         cm.addConstraint(EqExpr::create(
             read, ConstantExpr::alloc(it->second[i], Expr::Int8)));
@@ -157,7 +167,7 @@ void SeedInfo::patchSeed(const ExecutionState &state,
     bool success =
         solver->mayBeTrue(state.constraints, assignment.evaluate(condition),
                           res, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");            
+    assert(success && "solver failure in seed patching debug check");
     (void) success;
     assert(res && "seed patching failed");
   }

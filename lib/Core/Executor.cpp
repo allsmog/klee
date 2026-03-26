@@ -951,8 +951,7 @@ void Executor::branch(ExecutionState &state,
         bool success = solver->getValue(
             state.constraints, siit->assignment.evaluate(conditions[i]), res,
             state.queryMetaData);
-        assert(success && "FIXME: Unhandled solver failure");
-        (void) success;
+        if (!success) break;
         if (res->isTrue())
           break;
       }
@@ -1023,8 +1022,10 @@ ref<Expr> Executor::maxStaticPctChecks(ExecutionState &current,
     ref<klee::ConstantExpr> value;
     bool success = solver->getValue(current.constraints, condition, value,
                                     current.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
-    (void)success;
+    if (!success) {
+      terminateStateOnSolverError(current, "Solver failure in fork limit check");
+      return condition;
+    }
 
     std::string msg("skipping fork and concretizing condition (MaxStatic*Pct "
                     "limit reached) at ");
@@ -1111,8 +1112,7 @@ Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
       bool success = solver->getValue(current.constraints,
                                       siit->assignment.evaluate(condition), res,
                                       current.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
-      (void) success;
+      if (!success) break;
       if (res->isTrue()) {
         trueSeed = true;
       } else {
@@ -1173,8 +1173,7 @@ Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
         bool success = solver->getValue(current.constraints,
                                         siit->assignment.evaluate(condition),
                                         res, current.queryMetaData);
-        assert(success && "FIXME: Unhandled solver failure");
-        (void) success;
+        if (!success) break;
         if (res->isTrue()) {
           trueSeeds.push_back(*siit);
         } else {
@@ -1249,8 +1248,7 @@ void Executor::addConstraint(ExecutionState &state, ref<Expr> condition) {
       bool success = solver->mustBeFalse(state.constraints,
                                          siit->assignment.evaluate(condition),
                                          res, state.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
-      (void) success;
+      if (!success) break;
       if (res) {
         siit->patchSeed(state, condition, solver.get());
         warn = true;
@@ -1328,9 +1326,12 @@ ref<klee::ConstantExpr> Executor::toConstant(ExecutionState &state, ref<Expr> e,
   /* If no seed evaluation results in a constant, call the solver */
   ref<ConstantExpr> cvalue = getValueFromSeeds(state, e);
   if (!cvalue) {
-    [[maybe_unused]] bool success =
+    bool success =
         solver->getValue(state.constraints, e, cvalue, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    if (!success) {
+      terminateStateOnSolverError(state, "Solver failure in toConstant");
+      return ConstantExpr::alloc(0, e->getWidth());
+    }
   }
 
   std::string str;
@@ -1376,20 +1377,21 @@ void Executor::executeGetValue(ExecutionState &state,
     e = optimizer.optimizeExpr(e, true);
     bool success =
         solver->getValue(state.constraints, e, value, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
-    (void) success;
+    if (!success) {
+      terminateStateOnSolverError(state, "Solver failure in getValue");
+      return;
+    }
     bindLocal(target, state, value);
   } else {
     std::set< ref<Expr> > values;
-    for (std::vector<SeedInfo>::iterator siit = it->second.begin(), 
+    for (std::vector<SeedInfo>::iterator siit = it->second.begin(),
            siie = it->second.end(); siit != siie; ++siit) {
       ref<Expr> cond = siit->assignment.evaluate(e);
       cond = optimizer.optimizeExpr(cond, true);
       ref<ConstantExpr> value;
       bool success =
           solver->getValue(state.constraints, cond, value, state.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
-      (void) success;
+      if (!success) break;
       values.insert(value);
     }
     
@@ -2280,9 +2282,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 
       // check feasibility
       bool result;
-      bool success __attribute__((unused)) =
+      bool success =
           solver->mayBeTrue(state.constraints, e, result, state.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
+      if (!success) {
+        terminateStateOnSolverError(state, "Solver failure in switch");
+        return;
+      }
       if (result) {
         targets.push_back(d);
         expressions.push_back(e);
@@ -2290,9 +2295,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
     }
     // check errorCase feasibility
     bool result;
-    bool success __attribute__((unused)) = solver->mayBeTrue(
+    bool success = solver->mayBeTrue(
         state.constraints, errorCase, result, state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
+    if (!success) {
+      terminateStateOnSolverError(state, "Solver failure in switch");
+      return;
+    }
     if (result) {
       expressions.push_back(errorCase);
     }
@@ -2372,8 +2380,10 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
         match = optimizer.optimizeExpr(match, false);
         bool success = solver->mayBeTrue(state.constraints, match, result,
                                          state.queryMetaData);
-        assert(success && "FIXME: Unhandled solver failure");
-        (void) success;
+        if (!success) {
+          terminateStateOnSolverError(state, "Solver failure in switch");
+          return;
+        }
         if (result) {
           BasicBlock *caseSuccessor = it->second;
 
@@ -2401,7 +2411,10 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       bool res;
       bool success = solver->mayBeTrue(state.constraints, defaultValue, res,
                                        state.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
+      if (!success) {
+        terminateStateOnSolverError(state, "Solver failure in switch default");
+        return;
+      }
       (void) success;
       if (res) {
         std::pair<std::map<BasicBlock *, ref<Expr> >::iterator, bool> ret =
@@ -2526,8 +2539,10 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
         ref<ConstantExpr> value;
         bool success =
             solver->getValue(free->constraints, v, value, free->queryMetaData);
-        assert(success && "FIXME: Unhandled solver failure");
-        (void) success;
+        if (!success) {
+          terminateStateOnSolverError(*free, "Solver failure in indirect call");
+          break;
+        }
         StatePair res = fork(*free, EqExpr::create(v, value), true, BranchType::Call);
         if (res.first) {
           uint64_t addr = value->getZExtValue();
@@ -3717,8 +3732,10 @@ std::string Executor::getAddressInfo(ExecutionState &state,
     ref<ConstantExpr> value;
     bool success = solver->getValue(state.constraints, address, value,
                                     state.queryMetaData);
-    assert(success && "FIXME: Unhandled solver failure");
-    (void) success;
+    if (!success) {
+      info << "\t(solver failure, unable to get example value)\n";
+      return info.str();
+    }
     example = value->getZExtValue();
     info << "\texample: " << example << "\n";
     std::pair<ref<Expr>, ref<Expr>> res =
@@ -4260,18 +4277,20 @@ void Executor::executeAlloc(ExecutionState &state,
     if (!example) {
       bool success = solver->getValue(state.constraints, size, example,
                                       state.queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");
-      (void)success;
+      if (!success) {
+        terminateStateOnSolverError(state, "Solver failure in executeAlloc");
+        return;
+      }
 
       // Try and start with a small example.
       Expr::Width W = example->getWidth();
       while (example->Ugt(ConstantExpr::alloc(128, W))->isTrue()) {
         ref<ConstantExpr> tmp = example->LShr(ConstantExpr::alloc(1, W));
         bool res;
-        [[maybe_unused]] bool success =
+        bool success =
             solver->mayBeTrue(state.constraints, EqExpr::create(tmp, size), res,
                               state.queryMetaData);
-        assert(success && "FIXME: Unhandled solver failure");
+        if (!success) break;
         if (!res)
           break;
         example = tmp;
@@ -4286,14 +4305,20 @@ void Executor::executeAlloc(ExecutionState &state,
       ref<ConstantExpr> tmp;
       bool success = solver->getValue(fixedSize.second->constraints, size, tmp,
                                       fixedSize.second->queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");      
-      (void) success;
+      if (!success) {
+        terminateStateOnSolverError(*fixedSize.second,
+                                    "Solver failure in executeAlloc");
+        return;
+      }
       bool res;
       success = solver->mustBeTrue(fixedSize.second->constraints,
                                    EqExpr::create(tmp, size), res,
                                    fixedSize.second->queryMetaData);
-      assert(success && "FIXME: Unhandled solver failure");      
-      (void) success;
+      if (!success) {
+        terminateStateOnSolverError(*fixedSize.second,
+                                    "Solver failure in executeAlloc");
+        return;
+      }
       if (res) {
         executeAlloc(*fixedSize.second, tmp, isLocal,
                      target, zeroMemory, reallocFrom, 0, allocType);

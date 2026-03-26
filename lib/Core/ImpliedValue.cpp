@@ -15,6 +15,7 @@
 #include "klee/Expr/Expr.h"
 #include "klee/Expr/ExprUtil.h"
 #include "klee/Solver/Solver.h"
+#include "klee/Support/ErrorHandling.h"
 
 #include <map>
 #include <set>
@@ -225,13 +226,18 @@ void ImpliedValue::checkForImpliedValues(Solver *S, ref<Expr> e,
   for (const auto &var : reads) {
     ref<ConstantExpr> possible;
     bool success = S->getValue(Query(assumption, var), possible);
-    (void)success;
-    assert(success && "FIXME: Unhandled solver failure");    
+    if (!success) {
+      klee_warning("Solver failure in implied value check");
+      return;
+    }
     std::map<ref<ReadExpr>, ref<ConstantExpr> >::iterator it = found.find(var);
     bool res;
     success =
         S->mustBeTrue(Query(assumption, EqExpr::create(var, possible)), res);
-    assert(success && "FIXME: Unhandled solver failure");    
+    if (!success) {
+      klee_warning("Solver failure in implied value check");
+      return;
+    }    
     if (res) {
       if (it != found.end()) {
         assert(possible == it->second && "Invalid ImpliedValue!");
