@@ -946,10 +946,120 @@ Z3ASTHandle Z3Builder::constructActual(ref<Expr> e, int *width_out) {
     return Z3ASTHandle(Z3_mk_seq_extract(ctx, str, offInt, lenInt), ctx);
   }
 
+  // Floating-point operations
+  case Expr::FpAdd: {
+    Z3ASTHandle l = bvToFp(construct(e->getKid(0), width_out), e->getWidth());
+    Z3ASTHandle r = bvToFp(construct(e->getKid(1), 0), e->getWidth());
+    Z3ASTHandle result(Z3_mk_fpa_add(ctx, getFpRoundingMode(), l, r), ctx);
+    if (width_out) *width_out = e->getWidth();
+    return fpToBv(result, e->getWidth());
+  }
+  case Expr::FpSub: {
+    Z3ASTHandle l = bvToFp(construct(e->getKid(0), width_out), e->getWidth());
+    Z3ASTHandle r = bvToFp(construct(e->getKid(1), 0), e->getWidth());
+    Z3ASTHandle result(Z3_mk_fpa_sub(ctx, getFpRoundingMode(), l, r), ctx);
+    if (width_out) *width_out = e->getWidth();
+    return fpToBv(result, e->getWidth());
+  }
+  case Expr::FpMul: {
+    Z3ASTHandle l = bvToFp(construct(e->getKid(0), width_out), e->getWidth());
+    Z3ASTHandle r = bvToFp(construct(e->getKid(1), 0), e->getWidth());
+    Z3ASTHandle result(Z3_mk_fpa_mul(ctx, getFpRoundingMode(), l, r), ctx);
+    if (width_out) *width_out = e->getWidth();
+    return fpToBv(result, e->getWidth());
+  }
+  case Expr::FpDiv: {
+    Z3ASTHandle l = bvToFp(construct(e->getKid(0), width_out), e->getWidth());
+    Z3ASTHandle r = bvToFp(construct(e->getKid(1), 0), e->getWidth());
+    Z3ASTHandle result(Z3_mk_fpa_div(ctx, getFpRoundingMode(), l, r), ctx);
+    if (width_out) *width_out = e->getWidth();
+    return fpToBv(result, e->getWidth());
+  }
+  case Expr::FpRem: {
+    Z3ASTHandle l = bvToFp(construct(e->getKid(0), width_out), e->getWidth());
+    Z3ASTHandle r = bvToFp(construct(e->getKid(1), 0), e->getWidth());
+    Z3ASTHandle result(Z3_mk_fpa_rem(ctx, l, r), ctx);
+    if (width_out) *width_out = e->getWidth();
+    return fpToBv(result, e->getWidth());
+  }
+  case Expr::FpNeg: {
+    Z3ASTHandle op = bvToFp(construct(e->getKid(0), width_out), e->getWidth());
+    Z3ASTHandle result(Z3_mk_fpa_neg(ctx, op), ctx);
+    if (width_out) *width_out = e->getWidth();
+    return fpToBv(result, e->getWidth());
+  }
+  case Expr::FpCmp: {
+    FpCmpExpr *fc = cast<FpCmpExpr>(e);
+    unsigned w = fc->left->getWidth();
+    Z3ASTHandle l = bvToFp(construct(fc->left, 0), w);
+    Z3ASTHandle r = bvToFp(construct(fc->right, 0), w);
+    if (width_out) *width_out = 1;
+
+    // Map LLVM FCmp predicates to Z3 FPA comparisons
+    unsigned pred = fc->getPredicate();
+    // LLVM CmpInst::Predicate: FCMP_OEQ=1, FCMP_OGT=2, FCMP_OGE=3,
+    // FCMP_OLT=4, FCMP_OLE=5, FCMP_ONE=6, FCMP_ORD=7, FCMP_UNO=8,
+    // FCMP_UEQ=9, FCMP_UGT=10, FCMP_UGE=11, FCMP_ULT=12, FCMP_ULE=13,
+    // FCMP_UNE=14, FCMP_TRUE=15
+    switch (pred) {
+    case 1: // FCMP_OEQ
+    case 9: // FCMP_UEQ
+      return Z3ASTHandle(Z3_mk_fpa_eq(ctx, l, r), ctx);
+    case 2: // FCMP_OGT
+    case 10: // FCMP_UGT
+      return Z3ASTHandle(Z3_mk_fpa_gt(ctx, l, r), ctx);
+    case 3: // FCMP_OGE
+    case 11: // FCMP_UGE
+      return Z3ASTHandle(Z3_mk_fpa_geq(ctx, l, r), ctx);
+    case 4: // FCMP_OLT
+    case 12: // FCMP_ULT
+      return Z3ASTHandle(Z3_mk_fpa_lt(ctx, l, r), ctx);
+    case 5: // FCMP_OLE
+    case 13: // FCMP_ULE
+      return Z3ASTHandle(Z3_mk_fpa_leq(ctx, l, r), ctx);
+    case 6: // FCMP_ONE
+    case 14: // FCMP_UNE
+      return notExpr(Z3ASTHandle(Z3_mk_fpa_eq(ctx, l, r), ctx));
+    case 7: // FCMP_ORD (neither is NaN)
+      return andExpr(
+          notExpr(Z3ASTHandle(Z3_mk_fpa_is_nan(ctx, l), ctx)),
+          notExpr(Z3ASTHandle(Z3_mk_fpa_is_nan(ctx, r), ctx)));
+    case 8: // FCMP_UNO (either is NaN)
+      return orExpr(
+          Z3ASTHandle(Z3_mk_fpa_is_nan(ctx, l), ctx),
+          Z3ASTHandle(Z3_mk_fpa_is_nan(ctx, r), ctx));
+    case 15: // FCMP_TRUE
+      return getTrue();
+    default: // FCMP_FALSE (0)
+      return getFalse();
+    }
+  }
+
   default:
     assert(0 && "unhandled Expr type");
     return getTrue();
   }
+}
+
+Z3SortHandle Z3Builder::getFpSort(unsigned width) {
+  switch (width) {
+  case 32: return Z3SortHandle(Z3_mk_fpa_sort_32(ctx), ctx);
+  case 64: return Z3SortHandle(Z3_mk_fpa_sort_64(ctx), ctx);
+  default: return Z3SortHandle(Z3_mk_fpa_sort_64(ctx), ctx);
+  }
+}
+
+Z3ASTHandle Z3Builder::bvToFp(Z3ASTHandle bv, unsigned width) {
+  return Z3ASTHandle(
+      Z3_mk_fpa_to_fp_bv(ctx, bv, getFpSort(width)), ctx);
+}
+
+Z3ASTHandle Z3Builder::fpToBv(Z3ASTHandle fp, unsigned width) {
+  return Z3ASTHandle(Z3_mk_fpa_to_ieee_bv(ctx, fp), ctx);
+}
+
+Z3ASTHandle Z3Builder::getFpRoundingMode() {
+  return Z3ASTHandle(Z3_mk_fpa_rne(ctx), ctx);
 }
 
 Z3SortHandle Z3Builder::getStringSort() {

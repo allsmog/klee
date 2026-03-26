@@ -174,6 +174,12 @@ private:
   Z3ASTHandle buildRegex(const std::string &pattern);
   std::unordered_map<std::string, Z3ASTHandle> _string_var_cache;
 
+  // Floating-point theory support
+  Z3SortHandle getFpSort(unsigned width);
+  Z3ASTHandle bvToFp(Z3ASTHandle bv, unsigned width);
+  Z3ASTHandle fpToBv(Z3ASTHandle fp, unsigned width);
+  Z3ASTHandle getFpRoundingMode();
+
   bool autoClearConstructCache;
   std::string z3LogInteractionFile;
 

@@ -188,7 +188,16 @@ public:
     StrSubstr,       ///< Substring extraction (returns String)
     StrMatchesRegex, ///< Regex membership test (returns Bool)
 
-    LastKind=StrMatchesRegex,
+    // Symbolic floating-point operations (via Z3 FP theory)
+    FpAdd,   ///< FP addition (width = operand width)
+    FpSub,   ///< FP subtraction
+    FpMul,   ///< FP multiplication
+    FpDiv,   ///< FP division
+    FpRem,   ///< FP remainder
+    FpNeg,   ///< FP negation (unary)
+    FpCmp,   ///< FP comparison (returns Bool)
+
+    LastKind=FpCmp,
 
     CastKindFirst=ZExt,
     CastKindLast=SExt,
@@ -1555,6 +1564,122 @@ public:
     return E->getKind() == Expr::StrMatchesRegex;
   }
   static bool classof(const StrMatchesRegexExpr *) { return true; }
+};
+
+// =============================================================================
+// Floating-Point Expressions — Symbolic FP via Z3 FP theory
+// =============================================================================
+
+/// FP binary operation (add, sub, mul, div, rem).
+/// Width matches operands (32 for float, 64 for double).
+class FpBinExpr : public NonConstantExpr {
+public:
+  static const unsigned numKids = 2;
+  ref<Expr> left, right;
+
+protected:
+  FpBinExpr(const ref<Expr> &l, const ref<Expr> &r) : left(l), right(r) {}
+
+public:
+  Width getWidth() const { return left->getWidth(); }
+  unsigned getNumKids() const { return 2; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? left : right; }
+  int compareContents(const Expr &b) const { return 0; }
+};
+
+#define DEFINE_FP_BIN_EXPR(Name, KindVal)                                      \
+  class Name##Expr : public FpBinExpr {                                        \
+  public:                                                                      \
+    static const Kind kind = KindVal;                                          \
+    Name##Expr(const ref<Expr> &l, const ref<Expr> &r) : FpBinExpr(l, r) {}   \
+    static ref<Expr> alloc(const ref<Expr> &l, const ref<Expr> &r) {           \
+      ref<Expr> e(new Name##Expr(l, r));                                       \
+      e->computeHash();                                                        \
+      return e;                                                                \
+    }                                                                          \
+    static ref<Expr> create(const ref<Expr> &l, const ref<Expr> &r) {          \
+      return alloc(l, r);                                                      \
+    }                                                                          \
+    Kind getKind() const { return KindVal; }                                   \
+    ref<Expr> rebuild(ref<Expr> kids[]) const {                                \
+      return create(kids[0], kids[1]);                                         \
+    }                                                                          \
+    static bool classof(const Expr *E) {                                       \
+      return E->getKind() == KindVal;                                          \
+    }                                                                          \
+    static bool classof(const Name##Expr *) { return true; }                   \
+  };
+
+DEFINE_FP_BIN_EXPR(FpAdd, Expr::FpAdd)
+DEFINE_FP_BIN_EXPR(FpSub, Expr::FpSub)
+DEFINE_FP_BIN_EXPR(FpMul, Expr::FpMul)
+DEFINE_FP_BIN_EXPR(FpDiv, Expr::FpDiv)
+DEFINE_FP_BIN_EXPR(FpRem, Expr::FpRem)
+
+#undef DEFINE_FP_BIN_EXPR
+
+/// FP negation (unary). Width matches operand.
+class FpNegExpr : public NonConstantExpr {
+public:
+  static const Kind kind = FpNeg;
+  static const unsigned numKids = 1;
+  ref<Expr> operand;
+
+private:
+  FpNegExpr(const ref<Expr> &e) : operand(e) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &e) {
+    ref<Expr> r(new FpNegExpr(e));
+    r->computeHash();
+    return r;
+  }
+  static ref<Expr> create(const ref<Expr> &e) { return alloc(e); }
+  Width getWidth() const { return operand->getWidth(); }
+  Kind getKind() const { return FpNeg; }
+  unsigned getNumKids() const { return 1; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? operand : ref<Expr>(0); }
+  ref<Expr> rebuild(ref<Expr> kids[]) const { return create(kids[0]); }
+  int compareContents(const Expr &b) const { return 0; }
+  static bool classof(const Expr *E) { return E->getKind() == Expr::FpNeg; }
+  static bool classof(const FpNegExpr *) { return true; }
+};
+
+/// FP comparison. Returns Bool. Stores the FCmp predicate.
+class FpCmpExpr : public NonConstantExpr {
+public:
+  static const Kind kind = FpCmp;
+  static const unsigned numKids = 2;
+  ref<Expr> left, right;
+  unsigned predicate; // llvm::CmpInst::Predicate value
+
+private:
+  FpCmpExpr(const ref<Expr> &l, const ref<Expr> &r, unsigned pred)
+      : left(l), right(r), predicate(pred) {}
+
+public:
+  static ref<Expr> alloc(const ref<Expr> &l, const ref<Expr> &r, unsigned pred) {
+    ref<Expr> e(new FpCmpExpr(l, r, pred));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(const ref<Expr> &l, const ref<Expr> &r, unsigned pred) {
+    return alloc(l, r, pred);
+  }
+  unsigned getPredicate() const { return predicate; }
+  Width getWidth() const { return Bool; }
+  Kind getKind() const { return FpCmp; }
+  unsigned getNumKids() const { return 2; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? left : right; }
+  ref<Expr> rebuild(ref<Expr> kids[]) const {
+    return create(kids[0], kids[1], predicate);
+  }
+  unsigned computeHash();
+  int compareContents(const Expr &b) const {
+    return predicate - static_cast<const FpCmpExpr &>(b).predicate;
+  }
+  static bool classof(const Expr *E) { return E->getKind() == Expr::FpCmp; }
+  static bool classof(const FpCmpExpr *) { return true; }
 };
 
 } // End klee namespace

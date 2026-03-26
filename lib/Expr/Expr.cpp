@@ -174,6 +174,13 @@ void Expr::printKind(llvm::raw_ostream &os, Kind k) {
     X(StrCharAt);
     X(StrSubstr);
     X(StrMatchesRegex);
+    X(FpAdd);
+    X(FpSub);
+    X(FpMul);
+    X(FpDiv);
+    X(FpRem);
+    X(FpNeg);
+    X(FpCmp);
 #undef X
   default:
     assert(0 && "invalid kind");
@@ -255,6 +262,12 @@ unsigned StrMatchesRegexExpr::computeHash() {
   return hashValue;
 }
 
+unsigned FpCmpExpr::computeHash() {
+  hashValue = left->hash() * Expr::MAGIC_HASH_CONSTANT + right->hash();
+  hashValue = hashValue * Expr::MAGIC_HASH_CONSTANT + predicate;
+  return hashValue;
+}
+
 ref<Expr> Expr::createFromKind(Kind k, std::vector<CreateArg> args) {
   unsigned numArgs = args.size();
   (void) numArgs;
@@ -273,6 +286,13 @@ ref<Expr> Expr::createFromKind(Kind k, std::vector<CreateArg> args) {
     case StrCharAt:
     case StrSubstr:
     case StrMatchesRegex:
+    case FpAdd:
+    case FpSub:
+    case FpMul:
+    case FpDiv:
+    case FpRem:
+    case FpNeg:
+    case FpCmp:
     default:
       assert(0 && "invalid kind");
 

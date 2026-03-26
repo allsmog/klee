@@ -98,6 +98,13 @@ ref<Expr> ExprVisitor::visitActual(const ref<Expr> &e) {
     case Expr::StrCharAt: res = visitStrCharAt(static_cast<StrCharAtExpr&>(ep)); break;
     case Expr::StrSubstr: res = visitStrSubstr(static_cast<StrSubstrExpr&>(ep)); break;
     case Expr::StrMatchesRegex: res = visitStrMatchesRegex(static_cast<StrMatchesRegexExpr&>(ep)); break;
+    case Expr::FpAdd: res = visitFpAdd(static_cast<FpAddExpr&>(ep)); break;
+    case Expr::FpSub: res = visitFpSub(static_cast<FpSubExpr&>(ep)); break;
+    case Expr::FpMul: res = visitFpMul(static_cast<FpMulExpr&>(ep)); break;
+    case Expr::FpDiv: res = visitFpDiv(static_cast<FpDivExpr&>(ep)); break;
+    case Expr::FpRem: res = visitFpRem(static_cast<FpRemExpr&>(ep)); break;
+    case Expr::FpNeg: res = visitFpNeg(static_cast<FpNegExpr&>(ep)); break;
+    case Expr::FpCmp: res = visitFpCmp(static_cast<FpCmpExpr&>(ep)); break;
     case Expr::Constant:
     default:
       assert(0 && "invalid expression kind");
@@ -307,4 +314,12 @@ ExprVisitor::Action ExprVisitor::visitStrSubstr(const StrSubstrExpr&) {
 ExprVisitor::Action ExprVisitor::visitStrMatchesRegex(const StrMatchesRegexExpr&) {
   return Action::doChildren();
 }
+
+ExprVisitor::Action ExprVisitor::visitFpAdd(const FpAddExpr&) { return Action::doChildren(); }
+ExprVisitor::Action ExprVisitor::visitFpSub(const FpSubExpr&) { return Action::doChildren(); }
+ExprVisitor::Action ExprVisitor::visitFpMul(const FpMulExpr&) { return Action::doChildren(); }
+ExprVisitor::Action ExprVisitor::visitFpDiv(const FpDivExpr&) { return Action::doChildren(); }
+ExprVisitor::Action ExprVisitor::visitFpRem(const FpRemExpr&) { return Action::doChildren(); }
+ExprVisitor::Action ExprVisitor::visitFpNeg(const FpNegExpr&) { return Action::doChildren(); }
+ExprVisitor::Action ExprVisitor::visitFpCmp(const FpCmpExpr&) { return Action::doChildren(); }
 

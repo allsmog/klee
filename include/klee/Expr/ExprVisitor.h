@@ -92,6 +92,15 @@ namespace klee {
     virtual Action visitStrSubstr(const StrSubstrExpr&);
     virtual Action visitStrMatchesRegex(const StrMatchesRegexExpr&);
 
+    // Floating-point operations
+    virtual Action visitFpAdd(const FpAddExpr&);
+    virtual Action visitFpSub(const FpSubExpr&);
+    virtual Action visitFpMul(const FpMulExpr&);
+    virtual Action visitFpDiv(const FpDivExpr&);
+    virtual Action visitFpRem(const FpRemExpr&);
+    virtual Action visitFpNeg(const FpNegExpr&);
+    virtual Action visitFpCmp(const FpCmpExpr&);
+
   private:
     typedef ExprHashMap< ref<Expr> > visited_ty;
     visited_ty visited;
