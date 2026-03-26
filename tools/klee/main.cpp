@@ -124,6 +124,21 @@ namespace {
              cl::cat(TestCaseCat));
 
   cl::opt<bool>
+  WriteJSONTests("write-json-tests",
+                 cl::desc("Write test cases as JSON files (default=false)"),
+                 cl::cat(TestCaseCat));
+
+  cl::opt<bool>
+  WriteJSONSummary("write-json-summary",
+                   cl::desc("Write execution summary as summary.json (default=false)"),
+                   cl::cat(TestCaseCat));
+
+  cl::opt<bool>
+  WriteHTMLCov("write-html-cov",
+               cl::desc("Generate HTML coverage report (default=false)"),
+               cl::cat(TestCaseCat));
+
+  cl::opt<bool>
   WriteSymPaths("write-sym-paths",
                 cl::desc("Write .sym.path files for each test case (default=false)"),
                 cl::cat(TestCaseCat));
@@ -368,6 +383,16 @@ public:
       const std::vector<std::pair<std::string, std::vector<unsigned char>>>
           &assignments,
       unsigned id);
+  void writeTestCaseJSON(
+      bool isError, const char *errorMessage, const char *errorSuffix,
+      const std::vector<std::pair<std::string, std::vector<unsigned char>>>
+          &assignments,
+      unsigned id);
+  void writeExecutionSummary();
+  void writeHTMLCoverageReport();
+
+  /// Accumulated coverage across all test cases (for HTML report).
+  std::map<std::string, std::set<unsigned>> m_allCoveredLines;
 
   std::string getOutputFilename(const std::string &filename);
   std::unique_ptr<llvm::raw_fd_ostream> openOutputFile(const std::string &filename);
@@ -606,6 +631,123 @@ void KleeHandler::writeTestCaseXML(
   *file << "</testcase>\n";
 }
 
+void KleeHandler::writeTestCaseJSON(
+    bool isError, const char *errorMessage, const char *errorSuffix,
+    const std::vector<std::pair<std::string, std::vector<unsigned char>>>
+        &assignments,
+    unsigned id) {
+  auto f = openTestFile("json", id);
+  if (!f) return;
+
+  *f << "{\n";
+  *f << "  \"testId\": " << id << ",\n";
+
+  if (isError && errorMessage) {
+    *f << "  \"error\": {\n";
+    *f << "    \"type\": \"" << (errorSuffix ? errorSuffix : "unknown") << "\",\n";
+    std::string msg(errorMessage);
+    for (size_t pos = 0; (pos = msg.find('"', pos)) != std::string::npos; pos += 2)
+      msg.insert(pos, "\\");
+    for (size_t pos = 0; (pos = msg.find('\n', pos)) != std::string::npos; pos += 2)
+      msg.replace(pos, 1, "\\n");
+    *f << "    \"message\": \"" << msg << "\"\n";
+    *f << "  },\n";
+  } else {
+    *f << "  \"error\": null,\n";
+  }
+
+  *f << "  \"inputs\": [\n";
+  for (size_t i = 0; i < assignments.size(); i++) {
+    const auto &a = assignments[i];
+    *f << "    {\"name\": \"" << a.first << "\", \"size\": " << a.second.size()
+       << ", \"data\": [";
+    for (size_t j = 0; j < a.second.size(); j++) {
+      if (j) *f << ", ";
+      *f << (unsigned)a.second[j];
+    }
+    *f << "]}";
+    if (i + 1 < assignments.size()) *f << ",";
+    *f << "\n";
+  }
+  *f << "  ]\n";
+  *f << "}\n";
+}
+
+void KleeHandler::writeExecutionSummary() {
+  auto path = getOutputFilename("summary.json");
+  auto f = openOutputFile("summary.json");
+  if (!f) return;
+
+  *f << "{\n";
+  *f << "  \"totalTests\": " << m_numTotalTests << ",\n";
+  *f << "  \"generatedTests\": " << m_numGeneratedTests << ",\n";
+  *f << "  \"completedPaths\": " << m_pathsCompleted << ",\n";
+  *f << "  \"exploredPaths\": " << m_pathsExplored << "\n";
+  *f << "}\n";
+}
+
+void KleeHandler::writeHTMLCoverageReport() {
+  auto dirPath = getOutputFilename("coverage");
+  llvm::sys::fs::create_directory(dirPath);
+
+  std::error_code ec;
+  llvm::raw_fd_ostream f(dirPath + "/index.html", ec, llvm::sys::fs::OF_Text);
+  if (ec) return;
+
+  f << "<!DOCTYPE html><html><head><meta charset='utf-8'>\n"
+    << "<title>KLEE Coverage Report</title>\n"
+    << "<style>\n"
+    << "body{font-family:monospace;margin:20px}h1{color:#333}\n"
+    << "table{border-collapse:collapse;margin:20px 0}\n"
+    << "th,td{border:1px solid #ddd;padding:6px 12px;text-align:left}\n"
+    << "th{background:#f5f5f5}.cov{background:#dfd}.linenum{color:#999;"
+    << "padding-right:10px;user-select:none}pre{margin:0}\n"
+    << ".file-section{margin:30px 0}\n"
+    << "</style></head><body>\n"
+    << "<h1>KLEE Coverage Report</h1>\n";
+
+  // Summary table
+  f << "<table><tr><th>File</th><th>Covered Lines</th></tr>\n";
+  for (const auto &entry : m_allCoveredLines) {
+    f << "<tr><td><a href='#f" << &entry - &*m_allCoveredLines.begin()
+      << "'>" << entry.first << "</a></td><td>" << entry.second.size()
+      << "</td></tr>\n";
+  }
+  f << "</table>\n";
+
+  // Per-file annotated source
+  unsigned fileIdx = 0;
+  for (const auto &entry : m_allCoveredLines) {
+    f << "<div class='file-section' id='f" << fileIdx++ << "'>\n"
+      << "<h2>" << entry.first << "</h2>\n";
+
+    std::ifstream src(entry.first);
+    if (src.is_open()) {
+      f << "<table>\n";
+      std::string line;
+      unsigned lineNum = 1;
+      while (std::getline(src, line)) {
+        bool isCovered = entry.second.count(lineNum) > 0;
+        f << "<tr" << (isCovered ? " class='cov'" : "") << ">"
+          << "<td class='linenum'>" << lineNum << "</td><td><pre>";
+        for (char c : line) {
+          if (c == '<') f << "&lt;";
+          else if (c == '>') f << "&gt;";
+          else if (c == '&') f << "&amp;";
+          else f << c;
+        }
+        f << "</pre></td></tr>\n";
+        lineNum++;
+      }
+      f << "</table>\n";
+    } else {
+      f << "<p>(source file not available)</p>\n";
+    }
+    f << "</div>\n";
+  }
+  f << "</body></html>\n";
+}
+
 /* Outputs all files (.ktest, .kquery, .cov etc.) describing a test case */
 void KleeHandler::processTestCase(const ExecutionState &state,
                                   const char *errorMessage,
@@ -630,6 +772,12 @@ void KleeHandler::processTestCase(const ExecutionState &state,
 
       if (WriteXMLTests) {
         writeTestCaseXML(errorMessage != nullptr, assignments, test_id);
+        atLeastOneGenerated = true;
+      }
+
+      if (WriteJSONTests) {
+        writeTestCaseJSON(errorMessage != nullptr, errorMessage, errorSuffix,
+                          assignments, test_id);
         atLeastOneGenerated = true;
       }
     }
@@ -694,15 +842,23 @@ void KleeHandler::processTestCase(const ExecutionState &state,
       }
     }
 
-    if (WriteCov) {
+    if (WriteCov || WriteHTMLCov) {
       std::map<const std::string*, std::set<unsigned> > cov;
       m_interpreter->getCoveredLines(state, cov);
-      auto f = openTestFile("cov", test_id);
-      if (f) {
-        for (const auto &entry : cov) {
-          for (const auto &line : entry.second) {
-            *f << *entry.first << ':' << line << '\n';
+      if (WriteCov) {
+        auto f = openTestFile("cov", test_id);
+        if (f) {
+          for (const auto &entry : cov) {
+            for (const auto &line : entry.second) {
+              *f << *entry.first << ':' << line << '\n';
+            }
           }
+        }
+      }
+      if (WriteHTMLCov) {
+        for (const auto &entry : cov) {
+          m_allCoveredLines[*entry.first].insert(entry.second.begin(),
+                                                  entry.second.end());
         }
       }
     }
@@ -1770,6 +1926,12 @@ int main(int argc, char **argv, char **envp) {
     llvm::errs().resetColor();
 
   handler->getInfoStream() << stats.str();
+
+  if (WriteJSONSummary)
+    handler->writeExecutionSummary();
+
+  if (WriteHTMLCov)
+    handler->writeHTMLCoverageReport();
 
   delete handler;
 
