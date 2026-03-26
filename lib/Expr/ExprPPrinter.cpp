@@ -378,6 +378,10 @@ public:
   }
 
   void print(const ref<Expr> &e, PrintContext &PC, bool printConstWidth=false) {
+    if (e.isNull()) {
+      PC << "(null)";
+      return;
+    }
     if (ConstantExpr *CE = dyn_cast<ConstantExpr>(e))
       printConst(CE, PC, printConstWidth);
     else {
