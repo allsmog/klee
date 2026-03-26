@@ -23,6 +23,7 @@ add_library(kleeCore
   MemoryManager.cpp
   Searcher.cpp
   SeedInfo.cpp
+  PluginLoader.cpp
   SpecialFunctionHandler.cpp
   StatsTracker.cpp
   TimingSolver.cpp
@@ -35,6 +36,7 @@ target_link_libraries(kleeCore PRIVATE
   kleaverSolver
   kleaverExpr
   kleeSupport
+  ${CMAKE_DL_LIBS}
 )
 
 llvm_config(kleeCore "${USE_LLVM_SHARED}" core executionengine mcjit native support)

@@ -23,6 +23,7 @@
 #include "MemoryManager.h"
 #include "Searcher.h"
 #include "SeedInfo.h"
+#include "PluginLoader.h"
 #include "SpecialFunctionHandler.h"
 #include "StatsTracker.h"
 #include "TimingSolver.h"
@@ -233,6 +234,12 @@ cl::opt<ExtCallWarnings> ExternalCallWarnings(
         clEnumValN(ExtCallWarnings::All, "all",
                    "Always warn")),
     cl::init(ExtCallWarnings::OncePerFunction),
+    cl::cat(ExtCallsCat));
+
+cl::list<std::string> LoadPlugins(
+    "load-plugin",
+    cl::desc("Load a function handler plugin (.so/.dylib)"),
+    cl::value_desc("path"),
     cl::cat(ExtCallsCat));
 
 cl::opt<std::size_t> ExternalPageThreshold(
@@ -575,6 +582,16 @@ Executor::setModule(std::vector<std::unique_ptr<llvm::Module>> &modules,
   specialFunctionHandler = new SpecialFunctionHandler(*this);
   specialFunctionHandler->prepare(preservedFunctions);
 
+  // Load external function handler plugins
+  for (const auto &pluginPath : LoadPlugins) {
+    std::vector<const KleePluginHandlerInfo *> infos;
+    if (klee::loadPlugin(pluginPath, infos)) {
+      for (const auto *info : infos)
+        specialFunctionHandler->addPluginHandlers(info);
+    }
+  }
+  specialFunctionHandler->preparePlugins(preservedFunctions);
+
   preservedFunctions.push_back(opts.EntryPoint.c_str());
 
   // Preserve the free-standing library calls
@@ -590,6 +607,7 @@ Executor::setModule(std::vector<std::unique_ptr<llvm::Module>> &modules,
   kmodule->manifest(interpreterHandler, StatsTracker::useStatistics());
 
   specialFunctionHandler->bind();
+  specialFunctionHandler->bindPlugins();
 
   if (StatsTracker::useStatistics() || userSearcherRequiresMD2U()) {
     statsTracker = 

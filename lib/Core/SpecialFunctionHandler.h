@@ -11,6 +11,7 @@
 #define KLEE_SPECIALFUNCTIONHANDLER_H
 
 #include "klee/Config/config.h"
+#include "klee/Core/PluginHandler.h"
 
 #include <map>
 #include <vector>
@@ -37,6 +38,16 @@ namespace klee {
                      std::pair<Handler,bool> > handlers_ty;
 
     handlers_ty handlers;
+
+    /// Plugin handler map — free-function pointers loaded from .so plugins.
+    typedef std::map<const llvm::Function *,
+                     std::pair<KleePluginHandlerFn, bool>>
+        plugin_handlers_ty;
+    plugin_handlers_ty pluginHandlers;
+
+    /// All loaded plugin handler info arrays (kept alive for the session).
+    std::vector<const KleePluginHandlerInfo *> loadedPluginInfos;
+
     class Executor &executor;
 
     struct HandlerInfo {
@@ -62,6 +73,15 @@ namespace klee {
     /// Initialize the internal handler map after the module has been
     /// prepared for execution.
     void bind();
+
+    /// Register plugin handler infos (called after loadPlugin).
+    void addPluginHandlers(const KleePluginHandlerInfo *infos);
+
+    /// Prepare plugin-registered functions (strip bodies, mark preserved).
+    void preparePlugins(std::vector<const char *> &preservedFunctions);
+
+    /// Bind plugin handlers to the module's functions.
+    void bindPlugins();
 
     bool handle(ExecutionState &state, 
                 llvm::Function *f,

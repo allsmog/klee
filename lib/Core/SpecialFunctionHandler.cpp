@@ -209,29 +209,75 @@ void SpecialFunctionHandler::bind() {
     if (f && (!hi.doNotOverride || f->isDeclaration()))
       handlers[f] = std::make_pair(hi.handler, hi.hasReturnValue);
   }
+}
 
+void SpecialFunctionHandler::addPluginHandlers(
+    const KleePluginHandlerInfo *infos) {
+  loadedPluginInfos.push_back(infos);
+}
+
+void SpecialFunctionHandler::preparePlugins(
+    std::vector<const char *> &preservedFunctions) {
+  for (const auto *infos : loadedPluginInfos) {
+    for (const KleePluginHandlerInfo *p = infos; p->functionName; p++) {
+      Function *f = executor.kmodule->module->getFunction(p->functionName);
+      if (f) {
+        preservedFunctions.push_back(p->functionName);
+        if (p->doesNotReturn)
+          f->addFnAttr(Attribute::NoReturn);
+        if (!f->isDeclaration())
+          f->deleteBody();
+      }
+    }
+  }
+}
+
+void SpecialFunctionHandler::bindPlugins() {
+  for (const auto *infos : loadedPluginInfos) {
+    for (const KleePluginHandlerInfo *p = infos; p->functionName; p++) {
+      Function *f = executor.kmodule->module->getFunction(p->functionName);
+      if (f)
+        pluginHandlers[f] = std::make_pair(p->handler, p->hasReturnValue);
+    }
+  }
 }
 
 
-bool SpecialFunctionHandler::handle(ExecutionState &state, 
+
+bool SpecialFunctionHandler::handle(ExecutionState &state,
                                     Function *f,
                                     KInstruction *target,
                                     std::vector< ref<Expr> > &arguments) {
+  // Check plugin handlers first (plugins can override builtins)
+  auto pit = pluginHandlers.find(f);
+  if (pit != pluginHandlers.end()) {
+    KleePluginHandlerFn h = pit->second.first;
+    bool hasReturnValue = pit->second.second;
+    if (!hasReturnValue && !target->inst->use_empty()) {
+      executor.terminateStateOnExecError(
+          state, "expected return value from void plugin function");
+    } else {
+      h(static_cast<void*>(this), static_cast<void*>(&state),
+        static_cast<void*>(target), static_cast<void*>(&arguments));
+    }
+    return true;
+  }
+
+  // Check builtin handlers
   handlers_ty::iterator it = handlers.find(f);
-  if (it != handlers.end()) {    
+  if (it != handlers.end()) {
     Handler h = it->second.first;
     bool hasReturnValue = it->second.second;
-     // FIXME: Check this... add test?
     if (!hasReturnValue && !target->inst->use_empty()) {
-      executor.terminateStateOnExecError(state, 
+      executor.terminateStateOnExecError(state,
                                          "expected return value from void special function");
     } else {
       (this->*h)(state, target, arguments);
     }
     return true;
-  } else {
-    return false;
   }
+
+  return false;
 }
 
 /****/
