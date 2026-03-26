@@ -100,6 +100,7 @@ namespace klee {
     virtual Action visitFpRem(const FpRemExpr&);
     virtual Action visitFpNeg(const FpNegExpr&);
     virtual Action visitFpCmp(const FpCmpExpr&);
+    virtual Action visitFpConv(const FpConvExpr&);
 
   private:
     typedef ExprHashMap< ref<Expr> > visited_ty;

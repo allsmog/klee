@@ -155,6 +155,9 @@ namespace klee {
     HANDLER(handleStrncmpStr);
     HANDLER(handleMemcmpStr);
     HANDLER(handleMakeSymbolicStdString);
+    HANDLER(handlePthreadMutexOp);
+    HANDLER(handlePthreadCondOp);
+    HANDLER(handlePthreadCreateUnsupported);
 #undef HANDLER
   };
 } // End klee namespace

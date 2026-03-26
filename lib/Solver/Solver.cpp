@@ -90,7 +90,12 @@ bool Solver::getValue(const Query& query, ref<ConstantExpr> &result) {
   ref<Expr> tmp;
   if (!impl->computeValue(query, tmp))
     return false;
-  
+
+  // String/FP theory expressions may not reduce to ConstantExpr
+  // through all solver chain layers. Return false if not constant.
+  if (!isa<ConstantExpr>(tmp))
+    return false;
+
   result = cast<ConstantExpr>(tmp);
   return true;
 }

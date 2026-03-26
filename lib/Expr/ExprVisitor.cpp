@@ -105,6 +105,9 @@ ref<Expr> ExprVisitor::visitActual(const ref<Expr> &e) {
     case Expr::FpRem: res = visitFpRem(static_cast<FpRemExpr&>(ep)); break;
     case Expr::FpNeg: res = visitFpNeg(static_cast<FpNegExpr&>(ep)); break;
     case Expr::FpCmp: res = visitFpCmp(static_cast<FpCmpExpr&>(ep)); break;
+    case Expr::FpToUI: case Expr::FpToSI: case Expr::UIToFp:
+    case Expr::SIToFp: case Expr::FpTrunc: case Expr::FpExt:
+      res = visitFpConv(static_cast<FpConvExpr&>(ep)); break;
     case Expr::Constant:
     default:
       assert(0 && "invalid expression kind");
@@ -322,4 +325,5 @@ ExprVisitor::Action ExprVisitor::visitFpDiv(const FpDivExpr&) { return Action::d
 ExprVisitor::Action ExprVisitor::visitFpRem(const FpRemExpr&) { return Action::doChildren(); }
 ExprVisitor::Action ExprVisitor::visitFpNeg(const FpNegExpr&) { return Action::doChildren(); }
 ExprVisitor::Action ExprVisitor::visitFpCmp(const FpCmpExpr&) { return Action::doChildren(); }
+ExprVisitor::Action ExprVisitor::visitFpConv(const FpConvExpr&) { return Action::doChildren(); }
 

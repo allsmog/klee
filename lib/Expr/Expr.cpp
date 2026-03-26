@@ -181,6 +181,12 @@ void Expr::printKind(llvm::raw_ostream &os, Kind k) {
     X(FpRem);
     X(FpNeg);
     X(FpCmp);
+    X(FpToUI);
+    X(FpToSI);
+    X(UIToFp);
+    X(SIToFp);
+    X(FpTrunc);
+    X(FpExt);
 #undef X
   default:
     assert(0 && "invalid kind");
@@ -268,6 +274,12 @@ unsigned FpCmpExpr::computeHash() {
   return hashValue;
 }
 
+unsigned FpConvExpr::computeHash() {
+  hashValue = src->hash() * Expr::MAGIC_HASH_CONSTANT + exprKind;
+  hashValue = hashValue * Expr::MAGIC_HASH_CONSTANT + targetWidth;
+  return hashValue;
+}
+
 ref<Expr> Expr::createFromKind(Kind k, std::vector<CreateArg> args) {
   unsigned numArgs = args.size();
   (void) numArgs;
@@ -293,6 +305,12 @@ ref<Expr> Expr::createFromKind(Kind k, std::vector<CreateArg> args) {
     case FpRem:
     case FpNeg:
     case FpCmp:
+    case FpToUI:
+    case FpToSI:
+    case UIToFp:
+    case SIToFp:
+    case FpTrunc:
+    case FpExt:
     default:
       assert(0 && "invalid kind");
 

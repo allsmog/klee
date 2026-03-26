@@ -3052,6 +3052,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   case Instruction::FPTrunc: {
     FPTruncInst *fi = cast<FPTruncInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> rawArg = eval(ki, 0, state).value;
+    if (!isa<ConstantExpr>(rawArg)) {
+      Expr::Width resultType = getWidthForLLVMType(i->getType());
+      bindLocal(ki, state, FpConvExpr::create(Expr::FpTrunc, rawArg, resultType));
+      break;
+    }
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
                                        "floating point");
     if (!fpWidthToSemantics(arg->getWidth()) || resultType > arg->getWidth())
@@ -3069,6 +3075,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   case Instruction::FPExt: {
     FPExtInst *fi = cast<FPExtInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> rawArg = eval(ki, 0, state).value;
+    if (!isa<ConstantExpr>(rawArg)) {
+      Expr::Width resultType = getWidthForLLVMType(i->getType());
+      bindLocal(ki, state, FpConvExpr::create(Expr::FpExt, rawArg, resultType));
+      break;
+    }
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
                                         "floating point");
     if (!fpWidthToSemantics(arg->getWidth()) || arg->getWidth() > resultType)
@@ -3085,6 +3097,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   case Instruction::FPToUI: {
     FPToUIInst *fi = cast<FPToUIInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> rawArg = eval(ki, 0, state).value;
+    if (!isa<ConstantExpr>(rawArg)) {
+      Expr::Width resultType = getWidthForLLVMType(i->getType());
+      bindLocal(ki, state, FpConvExpr::create(Expr::FpToUI, rawArg, resultType));
+      break;
+    }
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
                                        "floating point");
     if (!fpWidthToSemantics(arg->getWidth()) || resultType > 64)
@@ -3107,6 +3125,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   case Instruction::FPToSI: {
     FPToSIInst *fi = cast<FPToSIInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> rawArg = eval(ki, 0, state).value;
+    if (!isa<ConstantExpr>(rawArg)) {
+      Expr::Width resultType = getWidthForLLVMType(i->getType());
+      bindLocal(ki, state, FpConvExpr::create(Expr::FpToSI, rawArg, resultType));
+      break;
+    }
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
                                        "floating point");
     if (!fpWidthToSemantics(arg->getWidth()) || resultType > 64)
@@ -3129,6 +3153,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   case Instruction::UIToFP: {
     UIToFPInst *fi = cast<UIToFPInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> rawArg = eval(ki, 0, state).value;
+    if (!isa<ConstantExpr>(rawArg)) {
+      Expr::Width resultType = getWidthForLLVMType(i->getType());
+      bindLocal(ki, state, FpConvExpr::create(Expr::UIToFp, rawArg, resultType));
+      break;
+    }
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
                                        "floating point");
     const llvm::fltSemantics *semantics = fpWidthToSemantics(resultType);
@@ -3145,6 +3175,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   case Instruction::SIToFP: {
     SIToFPInst *fi = cast<SIToFPInst>(i);
     Expr::Width resultType = getWidthForLLVMType(fi->getType());
+    ref<Expr> rawArg = eval(ki, 0, state).value;
+    if (!isa<ConstantExpr>(rawArg)) {
+      Expr::Width resultType = getWidthForLLVMType(i->getType());
+      bindLocal(ki, state, FpConvExpr::create(Expr::SIToFp, rawArg, resultType));
+      break;
+    }
     ref<ConstantExpr> arg = toConstant(state, eval(ki, 0, state).value,
                                        "floating point");
     const llvm::fltSemantics *semantics = fpWidthToSemantics(resultType);
@@ -4964,12 +5000,32 @@ bool Executor::getSymbolicSolution(const ExecutionState &state,
   for (unsigned i = 0; i != state.symbolics.size(); ++i)
     res.push_back(std::make_pair(state.symbolics[i].first->name, values[i]));
 
-  // Add symbolic string entries to test case output.
-  // The string values are represented as named entries in the test case.
-  // Full Z3 model extraction for concrete string values requires bypassing
-  // the solver chain's caching layers, which is planned for a future update.
+  // Extract concrete string values from Z3 via StrLen + StrCharAt.
   for (const auto &ss : state.symbolicStrings) {
-    std::vector<unsigned char> strBytes(ss.first.begin(), ss.first.end());
+    std::vector<unsigned char> strBytes;
+    ref<Expr> strExpr = ss.second;
+
+    ref<Expr> lenExpr = StrLenExpr::create(strExpr);
+    ref<ConstantExpr> lenVal;
+    bool lenSuccess = solver->getValue(extendedConstraints, lenExpr, lenVal,
+                                       state.queryMetaData);
+    if (lenSuccess) {
+      uint64_t len = lenVal->getZExtValue();
+      if (len > 4096) len = 4096;
+      for (uint64_t i = 0; i < len; i++) {
+        ref<Expr> charExpr = StrCharAtExpr::create(
+            strExpr, ConstantExpr::alloc(i, Expr::Int64));
+        ref<ConstantExpr> charVal;
+        if (solver->getValue(extendedConstraints, charExpr, charVal,
+                             state.queryMetaData))
+          strBytes.push_back((unsigned char)charVal->getZExtValue());
+        else
+          strBytes.push_back('?');
+      }
+    } else {
+      // Fallback: use name as placeholder
+      strBytes.assign(ss.first.begin(), ss.first.end());
+    }
     res.push_back(std::make_pair(ss.first, strBytes));
   }
 

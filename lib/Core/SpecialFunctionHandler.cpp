@@ -128,6 +128,21 @@ static constexpr std::array handlerInfo = {
   add("strncmp", handleStrncmpStr, true),
   add("memcmp", handleMemcmpStr, true),
   add("klee_make_symbolic_std_string", handleMakeSymbolicStdString, false),
+
+  // Pthread stubs — single-threaded models for programs using pthreads
+  add("pthread_mutex_init", handlePthreadMutexOp, true),
+  add("pthread_mutex_lock", handlePthreadMutexOp, true),
+  add("pthread_mutex_unlock", handlePthreadMutexOp, true),
+  add("pthread_mutex_destroy", handlePthreadMutexOp, true),
+  add("pthread_mutex_trylock", handlePthreadMutexOp, true),
+  add("pthread_cond_init", handlePthreadCondOp, true),
+  add("pthread_cond_wait", handlePthreadCondOp, true),
+  add("pthread_cond_signal", handlePthreadCondOp, true),
+  add("pthread_cond_broadcast", handlePthreadCondOp, true),
+  add("pthread_cond_destroy", handlePthreadCondOp, true),
+  addDNR("pthread_create", handlePthreadCreateUnsupported),
+  addDNR("pthread_join", handlePthreadCreateUnsupported),
+
   add("klee_mark_global", handleMarkGlobal, false),
   add("klee_open_merge", handleOpenMerge, false),
   add("klee_close_merge", handleCloseMerge, false),
@@ -1467,4 +1482,25 @@ void SpecialFunctionHandler::handleMakeSymbolicStdString(
     uint64_t cap = maxLen | (1ULL << 63);
     wos->write(16, ConstantExpr::alloc(cap, Expr::Int64));
   }
+}
+
+void SpecialFunctionHandler::handlePthreadMutexOp(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  // Single-threaded stub: mutex operations always succeed (return 0)
+  executor.bindLocal(target, state, ConstantExpr::alloc(0, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handlePthreadCondOp(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  // Single-threaded stub: condition variable operations always succeed
+  executor.bindLocal(target, state, ConstantExpr::alloc(0, Expr::Int32));
+}
+
+void SpecialFunctionHandler::handlePthreadCreateUnsupported(
+    ExecutionState &state, KInstruction *target,
+    std::vector<ref<Expr>> &arguments) {
+  executor.terminateStateOnUserError(
+      state, "pthread_create/pthread_join not supported in symbolic execution");
 }

@@ -1035,6 +1035,55 @@ Z3ASTHandle Z3Builder::constructActual(ref<Expr> e, int *width_out) {
     }
   }
 
+
+  // FP conversion operations
+  case Expr::FpToUI: {
+    FpConvExpr *fc = cast<FpConvExpr>(e);
+    Z3ASTHandle src = bvToFp(construct(fc->getKid(0), 0), fc->getKid(0)->getWidth());
+    if (width_out) *width_out = fc->getWidth();
+    return Z3ASTHandle(
+        Z3_mk_fpa_to_ubv(ctx, getFpRoundingMode(), src, fc->getWidth()), ctx);
+  }
+  case Expr::FpToSI: {
+    FpConvExpr *fc = cast<FpConvExpr>(e);
+    Z3ASTHandle src = bvToFp(construct(fc->getKid(0), 0), fc->getKid(0)->getWidth());
+    if (width_out) *width_out = fc->getWidth();
+    return Z3ASTHandle(
+        Z3_mk_fpa_to_sbv(ctx, getFpRoundingMode(), src, fc->getWidth()), ctx);
+  }
+  case Expr::UIToFp: {
+    FpConvExpr *fc = cast<FpConvExpr>(e);
+    Z3ASTHandle src = construct(fc->getKid(0), 0);
+    if (width_out) *width_out = fc->getWidth();
+    Z3ASTHandle result(
+        Z3_mk_fpa_to_fp_unsigned(ctx, getFpRoundingMode(), src, getFpSort(fc->getWidth())), ctx);
+    return fpToBv(result, fc->getWidth());
+  }
+  case Expr::SIToFp: {
+    FpConvExpr *fc = cast<FpConvExpr>(e);
+    Z3ASTHandle src = construct(fc->getKid(0), 0);
+    if (width_out) *width_out = fc->getWidth();
+    Z3ASTHandle result(
+        Z3_mk_fpa_to_fp_signed(ctx, getFpRoundingMode(), src, getFpSort(fc->getWidth())), ctx);
+    return fpToBv(result, fc->getWidth());
+  }
+  case Expr::FpTrunc: {
+    FpConvExpr *fc = cast<FpConvExpr>(e);
+    Z3ASTHandle src = bvToFp(construct(fc->getKid(0), 0), fc->getKid(0)->getWidth());
+    if (width_out) *width_out = fc->getWidth();
+    Z3ASTHandle result(
+        Z3_mk_fpa_to_fp_float(ctx, getFpRoundingMode(), src, getFpSort(fc->getWidth())), ctx);
+    return fpToBv(result, fc->getWidth());
+  }
+  case Expr::FpExt: {
+    FpConvExpr *fc = cast<FpConvExpr>(e);
+    Z3ASTHandle src = bvToFp(construct(fc->getKid(0), 0), fc->getKid(0)->getWidth());
+    if (width_out) *width_out = fc->getWidth();
+    Z3ASTHandle result(
+        Z3_mk_fpa_to_fp_float(ctx, getFpRoundingMode(), src, getFpSort(fc->getWidth())), ctx);
+    return fpToBv(result, fc->getWidth());
+  }
+
   default:
     assert(0 && "unhandled Expr type");
     return getTrue();

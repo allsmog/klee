@@ -196,8 +196,14 @@ public:
     FpRem,   ///< FP remainder
     FpNeg,   ///< FP negation (unary)
     FpCmp,   ///< FP comparison (returns Bool)
+    FpToUI,  ///< FP to unsigned int
+    FpToSI,  ///< FP to signed int
+    UIToFp,  ///< Unsigned int to FP
+    SIToFp,  ///< Signed int to FP
+    FpTrunc, ///< FP truncation (double to float)
+    FpExt,   ///< FP extension (float to double)
 
-    LastKind=FpCmp,
+    LastKind=FpExt,
 
     CastKindFirst=ZExt,
     CastKindLast=SExt,
@@ -1680,6 +1686,48 @@ public:
   }
   static bool classof(const Expr *E) { return E->getKind() == Expr::FpCmp; }
   static bool classof(const FpCmpExpr *) { return true; }
+};
+
+/// FP conversion expression (unary, with target width).
+/// Used for FpToUI, FpToSI, UIToFp, SIToFp, FpTrunc, FpExt.
+class FpConvExpr : public NonConstantExpr {
+public:
+  static const unsigned numKids = 1;
+  ref<Expr> src;
+  Width targetWidth;
+
+private:
+  Kind exprKind;
+
+  FpConvExpr(Kind k, const ref<Expr> &s, Width tw)
+      : src(s), targetWidth(tw), exprKind(k) {}
+
+public:
+  static ref<Expr> alloc(Kind k, const ref<Expr> &s, Width tw) {
+    ref<Expr> e(new FpConvExpr(k, s, tw));
+    e->computeHash();
+    return e;
+  }
+  static ref<Expr> create(Kind k, const ref<Expr> &s, Width tw) {
+    return alloc(k, s, tw);
+  }
+  Width getWidth() const { return targetWidth; }
+  Kind getKind() const { return exprKind; }
+  unsigned getNumKids() const { return 1; }
+  ref<Expr> getKid(unsigned i) const { return i == 0 ? src : ref<Expr>(0); }
+  ref<Expr> rebuild(ref<Expr> kids[]) const {
+    return create(exprKind, kids[0], targetWidth);
+  }
+  unsigned computeHash();
+  int compareContents(const Expr &b) const {
+    const FpConvExpr &o = static_cast<const FpConvExpr &>(b);
+    if (targetWidth != o.targetWidth) return targetWidth < o.targetWidth ? -1 : 1;
+    return 0;
+  }
+  static bool classof(const Expr *E) {
+    return E->getKind() >= Expr::FpToUI && E->getKind() <= Expr::FpExt;
+  }
+  static bool classof(const FpConvExpr *) { return true; }
 };
 
 } // End klee namespace
